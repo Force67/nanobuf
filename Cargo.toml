@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nanobuf-diagnostics"]
+members = ["crates/nanobuf-diagnostics", "crates/nanobuf-syntax"]
 
 [workspace.package]
 version = "0.1.0"

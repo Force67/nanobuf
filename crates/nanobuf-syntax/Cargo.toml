@@ -1,0 +1,13 @@
+[package]
+name = "nanobuf-syntax"
+description = "Lexer and parser for the nanobuf IDL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nanobuf-diagnostics = { path = "../nanobuf-diagnostics" }
+
+[lints]
+workspace = true
