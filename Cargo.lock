@@ -7,6 +7,14 @@ name = "nanobuf-diagnostics"
 version = "0.1.0"
 
 [[package]]
+name = "nanobuf-schema"
+version = "0.1.0"
+dependencies = [
+ "nanobuf-diagnostics",
+ "nanobuf-syntax",
+]
+
+[[package]]
 name = "nanobuf-syntax"
 version = "0.1.0"
 dependencies = [
