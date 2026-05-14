@@ -199,6 +199,17 @@ pub struct OffsetList<'a> {
 }
 
 impl<'a> OffsetList<'a> {
+    pub fn empty() -> Self {
+        OffsetList {
+            view: View {
+                data: &[0, 0],
+                fixed_len: 2,
+            },
+            offsets: &[],
+            count: 0,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.count
     }
@@ -225,5 +236,105 @@ impl<'a> OffsetList<'a> {
 
     pub fn message(&self, index: usize) -> Result<View<'a>, DecodeError> {
         View::parse(self.bytes(index)?)
+    }
+}
+
+/// Conversion from a raw [`View`]; implemented by generated view types so
+/// [`MessageList`] can yield them.
+pub trait FromView<'a>: Sized {
+    fn from_view(view: View<'a>) -> Self;
+}
+
+/// Typed `list<string>` reader.
+#[derive(Clone, Copy)]
+pub struct StrList<'a>(pub OffsetList<'a>);
+
+impl<'a> StrList<'a> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, index: usize) -> Result<&'a str, DecodeError> {
+        self.0.str(index)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Result<&'a str, DecodeError>> {
+        let list = *self;
+        (0..self.len()).map(move |i| list.get(i))
+    }
+
+    pub fn to_vec(&self) -> Result<Vec<String>, DecodeError> {
+        self.iter().map(|item| item.map(str::to_string)).collect()
+    }
+}
+
+/// Typed `list<bytes>` reader.
+#[derive(Clone, Copy)]
+pub struct BytesList<'a>(pub OffsetList<'a>);
+
+impl<'a> BytesList<'a> {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn get(&self, index: usize) -> Result<&'a [u8], DecodeError> {
+        self.0.bytes(index)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Result<&'a [u8], DecodeError>> {
+        let list = *self;
+        (0..self.len()).map(move |i| list.get(i))
+    }
+
+    pub fn to_vec(&self) -> Result<Vec<Vec<u8>>, DecodeError> {
+        self.iter().map(|item| item.map(<[u8]>::to_vec)).collect()
+    }
+}
+
+/// Typed `list<message>` reader yielding generated view types.
+pub struct MessageList<'a, T> {
+    list: OffsetList<'a>,
+    _marker: PhantomData<T>,
+}
+
+impl<'a, T> Clone for MessageList<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for MessageList<'a, T> {}
+
+impl<'a, T: FromView<'a>> MessageList<'a, T> {
+    pub fn new(list: OffsetList<'a>) -> Self {
+        MessageList {
+            list,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn get(&self, index: usize) -> Result<T, DecodeError> {
+        self.list.message(index).map(T::from_view)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = Result<T, DecodeError>> {
+        let list = *self;
+        (0..self.len()).map(move |i| list.get(i))
     }
 }

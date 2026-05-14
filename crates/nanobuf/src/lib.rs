@@ -13,5 +13,5 @@ mod write;
 
 pub use error::DecodeError;
 pub use scalar::Scalar;
-pub use view::{OffsetList, ScalarList, View};
+pub use view::{BytesList, FromView, MessageList, OffsetList, ScalarList, StrList, View};
 pub use write::Writer;
