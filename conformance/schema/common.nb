@@ -1,0 +1,7 @@
+schema common
+
+/// Origin of a packet.
+message Header {
+  source: u32 @1
+  region: string @2
+}

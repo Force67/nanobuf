@@ -109,6 +109,107 @@ impl<'a> FieldReader<'a> {
     }
 }
 
+/// Helpers used by generated `decode_proto3` code: each expects one wire
+/// shape and fails with [`DecodeError::WireType`] otherwise.
+pub fn expect_varint(value: WireValue<'_>) -> Result<u64, DecodeError> {
+    match value {
+        WireValue::Varint(v) => Ok(v),
+        _ => Err(DecodeError::WireType),
+    }
+}
+
+pub fn expect_i32(value: WireValue<'_>) -> Result<u32, DecodeError> {
+    match value {
+        WireValue::I32(v) => Ok(v),
+        _ => Err(DecodeError::WireType),
+    }
+}
+
+pub fn expect_i64(value: WireValue<'_>) -> Result<u64, DecodeError> {
+    match value {
+        WireValue::I64(v) => Ok(v),
+        _ => Err(DecodeError::WireType),
+    }
+}
+
+pub fn expect_len(value: WireValue<'_>) -> Result<&[u8], DecodeError> {
+    match value {
+        WireValue::Len(payload) => Ok(payload),
+        _ => Err(DecodeError::WireType),
+    }
+}
+
+pub fn expect_string(value: WireValue<'_>) -> Result<String, DecodeError> {
+    String::from_utf8(expect_len(value)?.to_vec()).map_err(|_| DecodeError::Utf8)
+}
+
+/// Reads a packed varint list payload, or a single unpacked element.
+pub fn read_packed_varints(
+    value: WireValue<'_>,
+    mut push: impl FnMut(u64),
+) -> Result<(), DecodeError> {
+    match value {
+        WireValue::Len(payload) => {
+            let mut pos = 0;
+            while pos < payload.len() {
+                push(read_varint(payload, &mut pos)?);
+            }
+            Ok(())
+        }
+        WireValue::Varint(v) => {
+            push(v);
+            Ok(())
+        }
+        _ => Err(DecodeError::WireType),
+    }
+}
+
+/// Reads a packed fixed32 list payload, or a single unpacked element.
+pub fn read_packed_fixed32(
+    value: WireValue<'_>,
+    mut push: impl FnMut(u32),
+) -> Result<(), DecodeError> {
+    match value {
+        WireValue::Len(payload) => {
+            if payload.len() % 4 != 0 {
+                return Err(DecodeError::Truncated);
+            }
+            for chunk in payload.chunks_exact(4) {
+                push(u32::from_le_bytes(chunk.try_into().unwrap()));
+            }
+            Ok(())
+        }
+        WireValue::I32(v) => {
+            push(v);
+            Ok(())
+        }
+        _ => Err(DecodeError::WireType),
+    }
+}
+
+/// Reads a packed fixed64 list payload, or a single unpacked element.
+pub fn read_packed_fixed64(
+    value: WireValue<'_>,
+    mut push: impl FnMut(u64),
+) -> Result<(), DecodeError> {
+    match value {
+        WireValue::Len(payload) => {
+            if payload.len() % 8 != 0 {
+                return Err(DecodeError::Truncated);
+            }
+            for chunk in payload.chunks_exact(8) {
+                push(u64::from_le_bytes(chunk.try_into().unwrap()));
+            }
+            Ok(())
+        }
+        WireValue::I64(v) => {
+            push(v);
+            Ok(())
+        }
+        _ => Err(DecodeError::WireType),
+    }
+}
+
 pub fn write_tag(out: &mut Vec<u8>, field: u32, wire_type: WireType) {
     write_varint(out, (u64::from(field) << 3) | wire_type as u64);
 }

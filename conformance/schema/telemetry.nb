@@ -1,0 +1,58 @@
+schema demo.telemetry
+
+import "common.nb"
+
+/// Link health.
+enum Status: u8 {
+  unknown = 0
+  ok = 1
+  degraded = 2
+}
+
+/// Wide backing with negative values.
+enum Wide: i32 {
+  zero = 0
+  neg = -5
+  big = 100000
+}
+
+/// Exercises every field shape nanobuf supports.
+message Everything {
+  flag: bool @1
+  tiny: u8 @2
+  small: i16 @3
+  medium: u32 @4
+  big: u64 @5
+  sneg: i64 @6
+  ratio: f32 @7
+  precise: f64 @8
+  status: Status @9
+  wide: Wide @10
+  name: string @11
+  blob: bytes @12
+  maybe_flag: bool? @13
+  maybe_small: i16? @14
+  maybe_precise: f64? @15
+  maybe_status: Status? @16
+  maybe_name: string? @17
+  maybe_blob: bytes? @18
+  numbers: list<u16> @19
+  floats: list<f64> @20
+  statuses: list<Status> @21
+  tags: list<string> @22
+  blobs: list<bytes> @23
+  headers: list<common.Header> @24
+  header: common.Header @25
+  fixed_int: i32 @26 [proto = sfixed32]
+  raw_int: i64 @27 [proto = int64]
+  flags: list<bool> @28
+
+  reserved @100
+}
+
+/// Recursive structure: forces boxing in owned types.
+message Tree {
+  value: i32 @1
+  left: Tree @2
+  right: Tree @3
+}

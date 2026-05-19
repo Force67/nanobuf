@@ -1,0 +1,17 @@
+[package]
+name = "nanobuf-codegen"
+description = "Code generators for nanobuf schemas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nanobuf-schema = { path = "../nanobuf-schema" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+nanobuf-diagnostics = { path = "../nanobuf-diagnostics" }
+nanobuf-syntax = { path = "../nanobuf-syntax" }

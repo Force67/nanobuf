@@ -7,6 +7,26 @@ name = "nanobuf"
 version = "0.1.0"
 
 [[package]]
+name = "nanobuf-codegen"
+version = "0.1.0"
+dependencies = [
+ "nanobuf-diagnostics",
+ "nanobuf-schema",
+ "nanobuf-syntax",
+]
+
+[[package]]
+name = "nanobuf-conformance"
+version = "0.1.0"
+dependencies = [
+ "nanobuf",
+ "nanobuf-codegen",
+ "nanobuf-diagnostics",
+ "nanobuf-schema",
+ "nanobuf-syntax",
+]
+
+[[package]]
 name = "nanobuf-diagnostics"
 version = "0.1.0"
 
