@@ -1,0 +1,17 @@
+[package]
+name = "nanobuf-proto"
+description = "Proto3 schema frontend: converts .proto files to nanobuf IDL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nanobuf-diagnostics = { path = "../nanobuf-diagnostics" }
+
+[dev-dependencies]
+nanobuf-schema = { path = "../nanobuf-schema" }
+nanobuf-syntax = { path = "../nanobuf-syntax" }
+
+[lints]
+workspace = true
