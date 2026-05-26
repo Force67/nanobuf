@@ -1,0 +1,18 @@
+[package]
+name = "nanoc"
+description = "The nanobuf schema compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+nanobuf-codegen = { path = "../nanobuf-codegen" }
+nanobuf-diagnostics = { path = "../nanobuf-diagnostics" }
+nanobuf-proto = { path = "../nanobuf-proto" }
+nanobuf-schema = { path = "../nanobuf-schema" }
+nanobuf-syntax = { path = "../nanobuf-syntax" }
+
+[lints]
+workspace = true
