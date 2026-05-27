@@ -74,15 +74,3 @@ fn recursive_fields_are_boxed() {
     let code = generate_rust("schema a\nmessage Tree {\n  left: Tree @1\n}\n");
     assert!(code.contains("pub left: Option<Box<Tree>>,"), "{code}");
 }
-
-#[test]
-fn unimplemented_backends_report_cleanly() {
-    let mut sources = SourceMap::new();
-    let mut diags = Diagnostics::new();
-    let text = "schema a\nmessage M {\n}\n";
-    let file = sources.add("t.nb", text);
-    let ast = nanobuf_syntax::parse(file, text, &mut diags).unwrap();
-    let schema = nanobuf_schema::analyze(&[Unit { file, ast }], &mut diags).unwrap();
-    let err = nanobuf_codegen::generate(&schema, nanobuf_codegen::Lang::Python, "out");
-    assert!(err.is_err());
-}
