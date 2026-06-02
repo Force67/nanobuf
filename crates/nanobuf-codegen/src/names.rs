@@ -79,7 +79,8 @@ const PYTHON_KEYWORDS: &[&str] = &[
 
 pub fn python_ident(name: &str) -> String {
     let name = snake(name);
-    if PYTHON_KEYWORDS.contains(&name.as_str()) {
+    // `self` and `cls` are not keywords but collide with method receivers.
+    if PYTHON_KEYWORDS.contains(&name.as_str()) || matches!(name.as_str(), "self" | "cls") {
         return format!("{name}_");
     }
     name
@@ -279,6 +280,8 @@ mod tests {
         assert_eq!(rust_ident("self"), "self_");
         assert_eq!(rust_ident("name"), "name");
         assert_eq!(python_ident("class"), "class_");
+        assert_eq!(python_ident("self"), "self_");
+        assert_eq!(python_ident("cls"), "cls_");
         assert_eq!(csharp_ident("string"), "String");
         assert_eq!(csharp_ident("event"), "Event");
         assert_eq!(cpp_ident("template"), "template_");
