@@ -52,16 +52,22 @@ pub struct GeneratedFile {
 pub fn generate(schema: &Schema, lang: Lang, stem: &str) -> Result<Vec<GeneratedFile>, String> {
     check_module_collisions(schema)?;
     let file = match lang {
-        Lang::Rust => GeneratedFile { name: format!("{stem}.rs"), content: rust::generate(schema) },
-        Lang::Python => {
-            GeneratedFile { name: format!("{stem}.py"), content: python::generate(schema) }
-        }
-        Lang::CSharp => {
-            GeneratedFile { name: format!("{stem}.cs"), content: csharp::generate(schema) }
-        }
-        Lang::Cpp => {
-            GeneratedFile { name: format!("{stem}.nb.h"), content: cpp::generate(schema) }
-        }
+        Lang::Rust => GeneratedFile {
+            name: format!("{stem}.rs"),
+            content: rust::generate(schema),
+        },
+        Lang::Python => GeneratedFile {
+            name: format!("{stem}.py"),
+            content: python::generate(schema),
+        },
+        Lang::CSharp => GeneratedFile {
+            name: format!("{stem}.cs"),
+            content: csharp::generate(schema),
+        },
+        Lang::Cpp => GeneratedFile {
+            name: format!("{stem}.nb.h"),
+            content: cpp::generate(schema),
+        },
     };
     Ok(vec![file])
 }
