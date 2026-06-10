@@ -1,0 +1,20 @@
+[package]
+name = "nanobuf-example"
+description = "Minimal end-to-end example: encode, view, decode"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nanobuf = { path = "../../crates/nanobuf" }
+
+[build-dependencies]
+nanobuf-codegen = { path = "../../crates/nanobuf-codegen" }
+nanobuf-diagnostics = { path = "../../crates/nanobuf-diagnostics" }
+nanobuf-schema = { path = "../../crates/nanobuf-schema" }
+nanobuf-syntax = { path = "../../crates/nanobuf-syntax" }
+
+[lints]
+workspace = true

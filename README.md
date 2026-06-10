@@ -86,6 +86,7 @@ fix-it help, including targeted messages for proto3 syntax habits.
 | `crates/nanoc` | the CLI |
 | `runtimes/` | Python, C++, and C# runtime libraries |
 | `conformance/` | shared schemas, golden fixtures, cross-language tests |
+| `examples/` | one schema used from Rust, Python, C++, and C# |
 
 The wire format and IDL are specified in [docs/wire-format.md](docs/wire-format.md)
 and [docs/idl.md](docs/idl.md).

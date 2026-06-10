@@ -1,0 +1,19 @@
+schema example.sensor
+
+/// How much to trust a reading.
+enum Quality: u8 {
+  good = 0
+  suspect = 1
+  bad = 2
+}
+
+/// One temperature reading from a field probe.
+message Reading {
+  probe: u32 @1
+  unix_ms: u64 @2
+  celsius: f64 @3
+  quality: Quality @4
+  site: string @5
+  samples: list<u16> @6
+  battery: f32? @7
+}

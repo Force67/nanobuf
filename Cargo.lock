@@ -139,6 +139,17 @@ name = "nanobuf-diagnostics"
 version = "0.1.0"
 
 [[package]]
+name = "nanobuf-example"
+version = "0.1.0"
+dependencies = [
+ "nanobuf",
+ "nanobuf-codegen",
+ "nanobuf-diagnostics",
+ "nanobuf-schema",
+ "nanobuf-syntax",
+]
+
+[[package]]
 name = "nanobuf-proto"
 version = "0.1.0"
 dependencies = [
