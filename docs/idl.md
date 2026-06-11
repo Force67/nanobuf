@@ -44,7 +44,7 @@ message Packet {
 `name: type @id`: ids start at 1, are unique per message, and are the
 unit of wire compatibility. `reserved @n, @m` retires ids permanently.
 
-Types: `bool`, `u8 u16 u32 u64`, `i8 i16 i32 i64`, `f32 f64`, `string`,
+Types: `bool`, `u8 u16 u32 u64`, `i8 i16 i32 i64`, `f16 f32 f64`, `string`,
 `bytes`, `list<T>`, enum and message names. `T?` marks a scalar, enum,
 `string`, or `bytes` field optional (absent is distinguishable from the
 default). Message-typed fields are always optional; writing `?` on them is

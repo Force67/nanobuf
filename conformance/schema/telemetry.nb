@@ -46,6 +46,9 @@ message Everything {
   fixed_int: i32 @26 [proto = sfixed32]
   raw_int: i64 @27 [proto = int64]
   flags: list<bool> @28
+  half_ratio: f16 @29
+  maybe_half: f16? @30
+  halves: list<f16> @31
 
   reserved @100
 }

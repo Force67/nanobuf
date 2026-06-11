@@ -68,6 +68,7 @@ fn cs_scalar(s: ScalarType) -> &'static str {
         ScalarType::I16 => "short",
         ScalarType::I32 => "int",
         ScalarType::I64 => "long",
+        ScalarType::F16 => "Half",
         ScalarType::F32 => "float",
         ScalarType::F64 => "double",
     }
@@ -605,6 +606,9 @@ fn proto_scalar_decode(s: ScalarType, enc: ProtoEncoding, v: &str) -> String {
     let ty = cs_scalar(s);
     match (enc, s) {
         (_, ScalarType::Bool) => format!("{v} != 0"),
+        (ProtoEncoding::Fixed, ScalarType::F16) => {
+            format!("(Half)BitConverter.UInt32BitsToSingle({v})")
+        }
         (ProtoEncoding::Fixed, ScalarType::F32) => format!("BitConverter.UInt32BitsToSingle({v})"),
         (ProtoEncoding::Fixed, ScalarType::F64) => format!("BitConverter.UInt64BitsToDouble({v})"),
         (ProtoEncoding::ZigZag, _) => format!("({ty})global::Nanobuf.Proto.ZigzagDecode({v})"),
@@ -617,13 +621,17 @@ fn proto_scalar_decode(s: ScalarType, enc: ProtoEncoding, v: &str) -> String {
 fn proto_scalar_encode(s: ScalarType, enc: ProtoEncoding, value: &str) -> String {
     match (enc, s) {
         (_, ScalarType::Bool) => format!("{value} ? 1UL : 0UL"),
+        // f16 travels widened to `float` on the proto3 wire.
+        (ProtoEncoding::Fixed, ScalarType::F16) => {
+            format!("BitConverter.SingleToUInt32Bits((float){value})")
+        }
         (ProtoEncoding::Fixed, ScalarType::F32) => {
             format!("BitConverter.SingleToUInt32Bits({value})")
         }
         (ProtoEncoding::Fixed, ScalarType::F64) => {
             format!("BitConverter.DoubleToUInt64Bits({value})")
         }
-        (ProtoEncoding::Fixed, s) if s.size() == 4 => format!("(uint){value}"),
+        (ProtoEncoding::Fixed, s) if s.proto_size() == 4 => format!("(uint){value}"),
         (ProtoEncoding::Fixed, _) => format!("(ulong){value}"),
         (ProtoEncoding::ZigZag, _) => format!("global::Nanobuf.Proto.ZigzagEncode({value})"),
         // Signed varints sign-extend through long to ulong.
@@ -636,7 +644,7 @@ fn proto_scalar_encode(s: ScalarType, enc: ProtoEncoding, value: &str) -> String
 
 /// Wire reader call yielding the raw scalar for the encoding.
 fn proto_scalar_raw(s: ScalarType, enc: ProtoEncoding) -> &'static str {
-    match (enc, s.size()) {
+    match (enc, s.proto_size()) {
         (ProtoEncoding::Fixed, 4) => "global::Nanobuf.Proto.ExpectI32(value)",
         (ProtoEncoding::Fixed, _) => "global::Nanobuf.Proto.ExpectI64(value)",
         _ => "global::Nanobuf.Proto.ExpectVarint(value)",
@@ -667,7 +675,7 @@ fn proto_read_field(w: &mut CodeWriter, schema: &Schema, m: &Message, f: &Field)
         }
         Type::List(elem) => match elem {
             ElemType::Scalar(s) => {
-                let reader = match (f.proto, s.size()) {
+                let reader = match (f.proto, s.proto_size()) {
                     (ProtoEncoding::Fixed, 4) => "ReadPackedFixed32",
                     (ProtoEncoding::Fixed, _) => "ReadPackedFixed64",
                     _ => "ReadPackedVarints",
@@ -710,7 +718,7 @@ fn proto_write_field(w: &mut CodeWriter, f: &Field) {
     let id = f.id;
     let tag_writer = |s: ScalarType, enc: ProtoEncoding, value: &str| -> String {
         let encoded = proto_scalar_encode(s, enc, value);
-        match (enc, s.size()) {
+        match (enc, s.proto_size()) {
             (ProtoEncoding::Fixed, 4) => {
                 format!("global::Nanobuf.Proto.WriteI32Field(output, {id}, {encoded});")
             }
@@ -729,6 +737,8 @@ fn proto_write_field(w: &mut CodeWriter, f: &Field) {
             } else {
                 let condition = if s == ScalarType::Bool {
                     format!("if ({prop}) {{")
+                } else if s == ScalarType::F16 {
+                    format!("if ({prop} != Half.Zero) {{")
                 } else {
                     format!("if ({prop} != 0) {{")
                 };
@@ -794,7 +804,7 @@ fn proto_write_field(w: &mut CodeWriter, f: &Field) {
             match elem {
                 ElemType::Scalar(s) => {
                     let item = proto_scalar_encode(s, f.proto, "item");
-                    let body = match (f.proto, s.size()) {
+                    let body = match (f.proto, s.proto_size()) {
                         (ProtoEncoding::Fixed, 4) => {
                             format!("global::Nanobuf.Proto.WriteFixed32(payload, {item});")
                         }

@@ -126,8 +126,28 @@ fn fmt_char(s: ScalarType) -> &'static str {
         ScalarType::I16 => "h",
         ScalarType::I32 => "i",
         ScalarType::I64 => "q",
+        ScalarType::F16 => "e",
         ScalarType::F32 => "f",
         ScalarType::F64 => "d",
+    }
+}
+
+/// `struct` format character on the proto3 wire, where `f16` travels
+/// widened to `float`.
+fn proto_fmt_char(s: ScalarType) -> &'static str {
+    match s {
+        ScalarType::F16 => "f",
+        _ => fmt_char(s),
+    }
+}
+
+/// Expression for `value` as it goes onto the proto3 wire. Typed runtimes
+/// hold `f16` fields already rounded; Python holds a full float, so it
+/// rounds here to keep the encodings byte-identical.
+fn proto_value_expr(s: ScalarType, value: &str) -> String {
+    match s {
+        ScalarType::F16 => format!("nanobuf.half_round({value})"),
+        _ => value.to_string(),
     }
 }
 
@@ -634,14 +654,15 @@ fn proto_write_field(w: &mut Py, f: &Field) {
             } else if s == ScalarType::Bool {
                 w.open(format!("if {field}:"));
             } else if s.is_float() {
-                w.open(format!("if {field} != 0.0:"));
+                w.open(format!("if {} != 0.0:", proto_value_expr(s, &field)));
             } else {
                 w.open(format!("if {field} != 0:"));
             }
             if f.proto == ProtoEncoding::Fixed {
                 w.line(format!(
-                    "nanobuf.write_fixed_field(out, {id}, \"{}\", {field})",
-                    fmt_char(s)
+                    "nanobuf.write_fixed_field(out, {id}, \"{}\", {})",
+                    proto_fmt_char(s),
+                    proto_value_expr(s, &field)
                 ));
             } else {
                 w.line(format!(
@@ -690,9 +711,11 @@ fn proto_write_field(w: &mut Py, f: &Field) {
         Type::List(elem) => match elem {
             ElemType::Scalar(s) => {
                 let item = match (f.proto, s) {
-                    (ProtoEncoding::Fixed, _) => {
-                        format!("nanobuf.write_fixed(packed, \"{}\", item)", fmt_char(s))
-                    }
+                    (ProtoEncoding::Fixed, _) => format!(
+                        "nanobuf.write_fixed(packed, \"{}\", {})",
+                        proto_fmt_char(s),
+                        proto_value_expr(s, "item")
+                    ),
                     _ => format!(
                         "nanobuf.write_varint(packed, {})",
                         varint_encode_expr(s, f.proto, "item")
@@ -744,9 +767,12 @@ fn proto_read_field(w: &mut Py, schema: &Schema, f: &Field, first: bool) {
     match f.ty {
         Type::Scalar(s) => {
             let expr = if f.proto == ProtoEncoding::Fixed {
-                format!(
-                    "nanobuf.expect_fixed(wire_type, value, \"{}\")",
-                    fmt_char(s)
+                proto_value_expr(
+                    s,
+                    &format!(
+                        "nanobuf.expect_fixed(wire_type, value, \"{}\")",
+                        proto_fmt_char(s)
+                    ),
                 )
             } else {
                 varint_decode_expr(s, f.proto, "nanobuf.expect_varint(wire_type, value)")
@@ -780,10 +806,17 @@ fn proto_read_field(w: &mut Py, schema: &Schema, f: &Field, first: bool) {
         }
         Type::List(elem) => match elem {
             ElemType::Scalar(s) if f.proto == ProtoEncoding::Fixed => {
-                w.line(format!(
-                    "{target}.extend(nanobuf.read_packed_fixed(wire_type, value, \"{}\"))",
-                    fmt_char(s)
-                ));
+                let items = format!(
+                    "nanobuf.read_packed_fixed(wire_type, value, \"{}\")",
+                    proto_fmt_char(s)
+                );
+                if s == ScalarType::F16 {
+                    w.line(format!(
+                        "{target}.extend(nanobuf.half_round(v) for v in {items})"
+                    ));
+                } else {
+                    w.line(format!("{target}.extend({items})"));
+                }
             }
             ElemType::Scalar(s) => {
                 let expr = varint_decode_expr(s, f.proto, "v");

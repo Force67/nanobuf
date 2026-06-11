@@ -95,6 +95,106 @@ inline double DoubleFromBits(uint64_t bits) {
   return value;
 }
 
+// An IEEE 754 binary16 value, stored as its raw bit pattern. C++17 has no
+// half type, so conversions go through float; narrowing rounds to nearest,
+// ties to even, exactly like the other language runtimes.
+//
+// Equality compares bits: -0.0 != 0.0, and NaN == NaN when the payloads
+// match. Compare via ToFloat() for numeric semantics.
+struct Float16 {
+  uint16_t bits = 0;
+
+  // Rounds to the nearest representable value, ties to even. Values
+  // beyond the binary16 range become infinity.
+  static Float16 FromFloat(float value) {
+    uint32_t raw = BitsOf(value);
+    uint16_t sign = static_cast<uint16_t>((raw >> 16) & 0x8000);
+    int exp = static_cast<int>((raw >> 23) & 0xff);
+    uint32_t frac = raw & 0x007fffff;
+
+    if (exp == 255) {
+      if (frac == 0) {
+        return Float16{static_cast<uint16_t>(sign | 0x7c00)};
+      }
+      // NaN: keep the top payload bits, force the quiet bit so the
+      // payload can never read back as infinity.
+      return Float16{static_cast<uint16_t>(sign | 0x7c00 | 0x0200 |
+                                           static_cast<uint16_t>(frac >> 13))};
+    }
+    int unbiased = exp - 127;
+    if (unbiased >= 16) {
+      return Float16{static_cast<uint16_t>(sign | 0x7c00)};
+    }
+    if (unbiased >= -14) {
+      // Normal result: drop 13 fraction bits with round-to-nearest-even.
+      // A carry out of the fraction bumps the exponent, which also turns
+      // 65520.0 and up into infinity.
+      uint32_t half = (static_cast<uint32_t>(unbiased + 15) << 10) | (frac >> 13);
+      uint32_t dropped = frac & 0x1fff;
+      if (dropped > 0x1000 || (dropped == 0x1000 && (half & 1) != 0)) {
+        half += 1;
+      }
+      return Float16{static_cast<uint16_t>(sign | half)};
+    }
+    if (unbiased >= -25 && exp != 0) {
+      // Subnormal result; a round-up carry into bit 10 lands on the
+      // smallest normal value, which is exactly right.
+      uint32_t mantissa = frac | 0x00800000;
+      uint32_t shift = static_cast<uint32_t>(-1 - unbiased);
+      uint32_t dropped = mantissa & ((1u << shift) - 1);
+      uint32_t halfway = 1u << (shift - 1);
+      uint32_t half = mantissa >> shift;
+      if (dropped > halfway || (dropped == halfway && (half & 1) != 0)) {
+        half += 1;
+      }
+      return Float16{static_cast<uint16_t>(sign | half)};
+    }
+    // Too small for binary16 (including all float subnormals).
+    return Float16{sign};
+  }
+
+  // Exact widening conversion.
+  float ToFloat() const {
+    uint32_t sign = static_cast<uint32_t>(bits & 0x8000) << 16;
+    uint32_t exp = (bits >> 10) & 0x1f;
+    uint32_t frac = bits & 0x03ff;
+    uint32_t raw;
+    if (exp == 0) {
+      if (frac == 0) {
+        raw = sign;
+      } else {
+        // Subnormal: renormalize under the wider exponent. The fraction's
+        // top bit at position `p` becomes implicit.
+        uint32_t p = 31;
+        while ((frac & (1u << p)) == 0) {
+          --p;
+        }
+        raw = sign | ((103 + p) << 23) | ((frac << (23 - p)) & 0x007fffff);
+      }
+    } else if (exp == 31) {
+      raw = sign | 0x7f800000 | (frac << 13);
+    } else {
+      raw = sign | ((exp + 112) << 23) | (frac << 13);
+    }
+    return FloatFromBits(raw);
+  }
+};
+
+inline bool operator==(Float16 a, Float16 b) { return a.bits == b.bits; }
+inline bool operator!=(Float16 a, Float16 b) { return a.bits != b.bits; }
+
+template <>
+struct ScalarCodec<Float16> {
+  static constexpr size_t kSize = 2;
+
+  static Float16 Read(const uint8_t* p) {
+    return Float16{ScalarCodec<uint16_t>::Read(p)};
+  }
+  static void Store(uint8_t* p, Float16 value) {
+    ScalarCodec<uint16_t>::Store(p, value.bits);
+  }
+};
+
 inline bool IsValidUtf8(const uint8_t* data, size_t size) {
   size_t i = 0;
   while (i < size) {

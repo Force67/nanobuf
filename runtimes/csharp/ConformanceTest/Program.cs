@@ -80,6 +80,14 @@ namespace Nanobuf.ConformanceTest {
             FixedInt = -123456,
             RawInt = -42,
             Flags = new List<bool> { true, false, true },
+            HalfRatio = (Half)(-1.5f),
+            MaybeHalf = (Half)0.25f,
+            Halves = new List<Half> {
+                Half.Zero,
+                (Half)65504.0f,
+                Half.Epsilon,  // smallest subnormal, 2^-24
+                Half.PositiveInfinity,
+            },
         };
 
         private static Tree SampleTree() => new() {
@@ -148,6 +156,11 @@ namespace Nanobuf.ConformanceTest {
             Check(view.RawInt == -42, "view.RawInt");
             var flags = view.Flags;
             Check(flags.Count == 3 && flags[0] && !flags[1] && flags[2], "view.Flags");
+            Check(view.HalfRatio == (Half)(-1.5f), "view.HalfRatio");
+            Check(view.MaybeHalf == (Half)0.25f, "view.MaybeHalf");
+            var halves = view.Halves;
+            Check(halves.Count == 4 && halves[0] == Half.Zero && halves[1] == (Half)65504.0f
+                && halves[2] == Half.Epsilon && halves[3] == Half.PositiveInfinity, "view.Halves");
             Check(view.ToOwned().Equals(SampleEverything()), "view.ToOwned() equals sample");
             Check(view.Data.SequenceEqual(everythingBin), "view.Data round trips");
 

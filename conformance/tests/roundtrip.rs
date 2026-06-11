@@ -60,6 +60,17 @@ fn view_accessors_match_owned_values() {
     assert_eq!(v.fixed_int(), -123456);
     assert_eq!(v.raw_int(), -42);
     assert_eq!(v.flags().unwrap().to_vec(), vec![true, false, true]);
+    assert_eq!(v.half_ratio().to_f32(), -1.5);
+    assert_eq!(v.maybe_half(), Some(nanobuf::F16::from_f32(0.25)));
+    assert_eq!(
+        v.halves().unwrap().to_vec(),
+        vec![
+            nanobuf::F16::ZERO,
+            nanobuf::F16::from_f32(65504.0),
+            nanobuf::F16(0x0001),
+            nanobuf::F16::INFINITY,
+        ]
+    );
 }
 
 #[test]

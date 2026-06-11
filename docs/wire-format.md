@@ -26,12 +26,17 @@ position of `fixed_len`). Slot value `0` means the field is absent.
 |-----------------------|------------------------------------------|
 | `bool`                | 1 bit                                    |
 | `u8 i8`               | 1 byte                                   |
-| `u16 i16`             | 2 bytes, 2-aligned                       |
+| `u16 i16 f16`         | 2 bytes, 2-aligned                       |
 | `u32 i32 f32`         | 4 bytes, 4-aligned                       |
 | `u64 i64 f64`         | 8 bytes, 8-aligned                       |
 | enum                  | backing type width                       |
 | `string bytes list T` | `u32` offset slot, 4-aligned             |
 | message               | `u32` offset slot, 4-aligned             |
+
+Floats are IEEE 754 binary16/binary32/binary64. Languages without a
+native half type carry `f16` as its raw bits and convert through `f32`;
+the narrowing conversion rounds to nearest, ties to even, in every
+runtime, so all backends produce identical bytes for the same value.
 
 Optional scalars, enums, and bools additionally carry a presence bit.
 Optional heap fields do not: slot `0` already encodes absence. A
@@ -100,4 +105,6 @@ proto wire: unsigned integers and `bool` use varint, signed integers use
 zigzag varint by default (`[proto = int32]`-style attributes override this
 for schemas imported from `.proto` files), floats use fixed32/fixed64,
 strings/bytes/messages are length-delimited, and scalar lists are packed.
+Proto3 has no half float, so `f16` travels widened to `float` (fixed32)
+and rounds back to binary16 on decode.
 This mode exists only to talk to legacy proto3 peers during migration.

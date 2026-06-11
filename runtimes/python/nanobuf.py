@@ -6,12 +6,27 @@ proto3 wire codec used in migration mode. Wire layout is decided by the
 schema compiler; this module only reads and writes the offsets it is given.
 """
 
+import math
 import struct
 from typing import Callable, Iterator, Optional, Sequence, Union
 
 BytesLike = Union[bytes, bytearray, memoryview]
 
 _U64_MASK = 0xFFFFFFFFFFFFFFFF
+
+
+def half_round(value: float) -> float:
+    """Rounds to the nearest binary16 value, ties to even.
+
+    `f16` fields hold whatever float the caller assigned; the wire carries
+    binary16, so rounding here is what every typed runtime does at
+    assignment time. `struct` raises where IEEE rounds overflow to
+    infinity, hence the fallback.
+    """
+    try:
+        return struct.unpack("<e", struct.pack("<e", value))[0]
+    except OverflowError:
+        return math.inf if value > 0 else -math.inf
 
 
 class DecodeError(Exception):
@@ -305,6 +320,8 @@ class Writer:
 
     def put_scalar(self, offset: int, fmt: str, value) -> None:
         """Writes a scalar into the fixed section."""
+        if fmt == "e":
+            value = half_round(value)
         struct.pack_into("<" + fmt, self._buf, self._base + offset, value)
 
     def put_bit(self, byte: int, bit: int, value: bool) -> None:
@@ -357,6 +374,8 @@ class Writer:
         entry = len(self._buf)
         self._buf += struct.pack("<I", len(items))
         for item in items:
+            if fmt == "e":
+                item = half_round(item)
             self._buf += struct.pack("<" + fmt, item)
         self.set_slot(slot, entry - self._base)
 

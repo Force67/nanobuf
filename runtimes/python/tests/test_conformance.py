@@ -4,6 +4,7 @@ Sample values mirror `conformance/src/lib.rs` byte-for-byte; the fixture
 files are golden output from the Rust implementation.
 """
 
+import math
 import pathlib
 import struct
 
@@ -52,6 +53,9 @@ def sample_everything():
         fixed_int=-123456,
         raw_int=-42,
         flags=[True, False, True],
+        half_ratio=-1.5,
+        maybe_half=0.25,
+        halves=[0.0, 65504.0, 2.0**-24, math.inf],
     )
 
 
@@ -109,6 +113,18 @@ def test_view_accessors_match_sample_values():
     assert v.fixed_int == -123456
     assert v.raw_int == -42
     assert v.flags == [True, False, True]
+    assert v.half_ratio == -1.5
+    assert v.maybe_half == 0.25
+    assert v.halves == [0.0, 65504.0, 2.0**-24, math.inf]
+
+
+def test_half_fields_round_to_binary16():
+    # The in-memory value can be any float; the wire carries binary16.
+    m = telemetry.Everything(half_ratio=0.1, maybe_half=1e30)
+    decoded = telemetry.Everything.decode(m.encode())
+    assert decoded.half_ratio == nanobuf.half_round(0.1)
+    assert decoded.half_ratio != 0.1
+    assert decoded.maybe_half == math.inf
 
 
 def test_tree_views_walk_nested_messages():

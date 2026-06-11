@@ -141,6 +141,7 @@ fn cpp_scalar(s: ScalarType) -> &'static str {
         ScalarType::I16 => "int16_t",
         ScalarType::I32 => "int32_t",
         ScalarType::I64 => "int64_t",
+        ScalarType::F16 => "nanobuf::Float16",
         ScalarType::F32 => "float",
         ScalarType::F64 => "double",
     }
@@ -256,6 +257,8 @@ fn field_decl(schema: &Schema, m: &Message, f: &Field) -> String {
     let name = cpp_ident(&f.name);
     match f.ty {
         Type::Scalar(ScalarType::Bool) if !f.optional => format!("{ty} {name} = false;"),
+        // Float16 zero-initializes through its member default.
+        Type::Scalar(ScalarType::F16) => format!("{ty} {name};"),
         Type::Scalar(_) if !f.optional => format!("{ty} {name} = 0;"),
         _ => format!("{ty} {name};"),
     }
@@ -863,10 +866,17 @@ fn proto_codecs(w: &mut CodeWriter, schema: &Schema, m: &Message, name: &str) {
 fn proto_scalar_encode(s: ScalarType, enc: ProtoEncoding, value: &str) -> String {
     match (enc, s) {
         (_, ScalarType::Bool) => format!("static_cast<uint64_t>({value})"),
+        // f16 travels widened to `float` on the proto3 wire.
+        (ProtoEncoding::Fixed, ScalarType::F16) => {
+            // Parenthesized: `value` may be a dereference like `*field`.
+            format!("nanobuf::BitsOf(({value}).ToFloat())")
+        }
         (ProtoEncoding::Fixed, ScalarType::F32) | (ProtoEncoding::Fixed, ScalarType::F64) => {
             format!("nanobuf::BitsOf({value})")
         }
-        (ProtoEncoding::Fixed, s) if s.size() == 4 => format!("static_cast<uint32_t>({value})"),
+        (ProtoEncoding::Fixed, s) if s.proto_size() == 4 => {
+            format!("static_cast<uint32_t>({value})")
+        }
         (ProtoEncoding::Fixed, _) => format!("static_cast<uint64_t>({value})"),
         (ProtoEncoding::ZigZag, _) => format!("nanobuf::proto::ZigZagEncode({value})"),
         // Signed varints sign-extend through int64_t.
@@ -882,6 +892,9 @@ fn proto_scalar_encode(s: ScalarType, enc: ProtoEncoding, value: &str) -> String
 fn proto_scalar_decode(s: ScalarType, enc: ProtoEncoding, v: &str) -> String {
     match (enc, s) {
         (_, ScalarType::Bool) => format!("{v} != 0"),
+        (ProtoEncoding::Fixed, ScalarType::F16) => {
+            format!("nanobuf::Float16::FromFloat(nanobuf::FloatFromBits({v}))")
+        }
         (ProtoEncoding::Fixed, ScalarType::F32) => format!("nanobuf::FloatFromBits({v})"),
         (ProtoEncoding::Fixed, ScalarType::F64) => format!("nanobuf::DoubleFromBits({v})"),
         (ProtoEncoding::ZigZag, _) => format!(
@@ -896,7 +909,7 @@ fn proto_write_field(w: &mut CodeWriter, f: &Field) {
     let field = format!("this->{}", cpp_ident(&f.name));
     let id = f.id;
     let tag_writer = |s: ScalarType, enc: ProtoEncoding, value: &str| -> String {
-        match (enc, s.size()) {
+        match (enc, s.proto_size()) {
             (ProtoEncoding::Fixed, 4) => format!(
                 "nanobuf::proto::WriteI32Field(out, {id}, {});",
                 proto_scalar_encode(s, enc, value)
@@ -920,6 +933,10 @@ fn proto_write_field(w: &mut CodeWriter, f: &Field) {
             } else {
                 let condition = if s == ScalarType::Bool {
                     format!("if ({field}) {{")
+                } else if s == ScalarType::F16 {
+                    // Numeric comparison, so -0.0 is skipped like the
+                    // other float widths.
+                    format!("if ({field}.ToFloat() != 0.0f) {{")
                 } else {
                     format!("if ({field} != 0) {{")
                 };
@@ -977,7 +994,7 @@ fn proto_write_field(w: &mut CodeWriter, f: &Field) {
             match elem {
                 ElemType::Scalar(s) => {
                     let item = proto_scalar_encode(s, f.proto, &format!("{field}[i]"));
-                    let append = match (f.proto, s.size()) {
+                    let append = match (f.proto, s.proto_size()) {
                         (ProtoEncoding::Fixed, 4) => {
                             format!("nanobuf::proto::WriteFixed32(payload, {item});")
                         }
@@ -1032,7 +1049,7 @@ fn proto_read_field(w: &mut CodeWriter, schema: &Schema, m: &Message, f: &Field)
     let id = f.id;
     match f.ty {
         Type::Scalar(s) => {
-            let (raw_type, expect) = match (f.proto, s.size()) {
+            let (raw_type, expect) = match (f.proto, s.proto_size()) {
                 (ProtoEncoding::Fixed, 4) => ("uint32_t", "ExpectI32"),
                 (ProtoEncoding::Fixed, _) => ("uint64_t", "ExpectI64"),
                 _ => ("uint64_t", "ExpectVarint"),
@@ -1109,7 +1126,7 @@ fn proto_read_field(w: &mut CodeWriter, schema: &Schema, m: &Message, f: &Field)
         }
         Type::List(elem) => match elem {
             ElemType::Scalar(s) => {
-                let (reader, raw_type) = match (f.proto, s.size()) {
+                let (reader, raw_type) = match (f.proto, s.proto_size()) {
                     (ProtoEncoding::Fixed, 4) => ("ReadPackedFixed32", "uint32_t"),
                     (ProtoEncoding::Fixed, _) => ("ReadPackedFixed64", "uint64_t"),
                     _ => ("ReadPackedVarints", "uint64_t"),

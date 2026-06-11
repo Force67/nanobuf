@@ -50,6 +50,14 @@ pub fn sample_everything() -> Everything {
         fixed_int: -123456,
         raw_int: -42,
         flags: vec![true, false, true],
+        half_ratio: nanobuf::F16::from_f32(-1.5),
+        maybe_half: Some(nanobuf::F16::from_f32(0.25)),
+        halves: vec![
+            nanobuf::F16::ZERO,
+            nanobuf::F16::from_f32(65504.0),
+            nanobuf::F16(0x0001), // smallest subnormal, 2^-24
+            nanobuf::F16::INFINITY,
+        ],
     }
 }
 

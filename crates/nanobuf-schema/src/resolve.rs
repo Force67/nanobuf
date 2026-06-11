@@ -27,6 +27,7 @@ const PRIMITIVES: &[(&str, Type)] = &[
     ("i16", Type::Scalar(ScalarType::I16)),
     ("i32", Type::Scalar(ScalarType::I32)),
     ("i64", Type::Scalar(ScalarType::I64)),
+    ("f16", Type::Scalar(ScalarType::F16)),
     ("f32", Type::Scalar(ScalarType::F32)),
     ("f64", Type::Scalar(ScalarType::F64)),
     ("string", Type::String),

@@ -20,6 +20,7 @@ pub enum ScalarType {
     I16,
     I32,
     I64,
+    F16,
     F32,
     F64,
 }
@@ -31,7 +32,7 @@ impl ScalarType {
         match self {
             ScalarType::Bool => 0,
             ScalarType::U8 | ScalarType::I8 => 1,
-            ScalarType::U16 | ScalarType::I16 => 2,
+            ScalarType::U16 | ScalarType::I16 | ScalarType::F16 => 2,
             ScalarType::U32 | ScalarType::I32 | ScalarType::F32 => 4,
             ScalarType::U64 | ScalarType::I64 | ScalarType::F64 => 8,
         }
@@ -48,8 +49,18 @@ impl ScalarType {
             ScalarType::I16 => "i16",
             ScalarType::I32 => "i32",
             ScalarType::I64 => "i64",
+            ScalarType::F16 => "f16",
             ScalarType::F32 => "f32",
             ScalarType::F64 => "f64",
+        }
+    }
+
+    /// Size on the proto3 wire in migration mode. `f16` has no proto3
+    /// equivalent and travels widened to `float`.
+    pub fn proto_size(self) -> u32 {
+        match self {
+            ScalarType::F16 => 4,
+            _ => self.size(),
         }
     }
 
@@ -61,7 +72,7 @@ impl ScalarType {
     }
 
     pub fn is_float(self) -> bool {
-        matches!(self, ScalarType::F32 | ScalarType::F64)
+        matches!(self, ScalarType::F16 | ScalarType::F32 | ScalarType::F64)
     }
 
     /// Inclusive value range, for enum backing checks. Floats have none.
@@ -76,7 +87,7 @@ impl ScalarType {
             ScalarType::I16 => (i16::MIN as i64, i16::MAX as i64),
             ScalarType::I32 => (i32::MIN as i64, i32::MAX as i64),
             ScalarType::I64 => (i64::MIN, i64::MAX),
-            ScalarType::F32 | ScalarType::F64 => return None,
+            ScalarType::F16 | ScalarType::F32 | ScalarType::F64 => return None,
         })
     }
 }

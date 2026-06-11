@@ -2,6 +2,7 @@
 // the sample values here must stay byte-identical to the Rust fixtures.
 
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -60,6 +61,12 @@ Everything SampleEverything() {
   e.fixed_int = -123456;
   e.raw_int = -42;
   e.flags = {true, false, true};
+  e.half_ratio = nanobuf::Float16::FromFloat(-1.5f);
+  e.maybe_half = nanobuf::Float16::FromFloat(0.25f);
+  e.halves = {nanobuf::Float16{},
+              nanobuf::Float16::FromFloat(65504.0f),
+              nanobuf::Float16{0x0001},  // smallest subnormal, 2^-24
+              nanobuf::Float16::FromFloat(HUGE_VALF)};
   return e;
 }
 
@@ -182,6 +189,15 @@ void TestViewAccessors(const std::vector<uint8_t>& everything_bin) {
   std::optional<nanobuf::ScalarList<bool>> flags = v.flags();
   assert(flags.has_value() &&
          flags->ToVector() == std::vector<bool>({true, false, true}));
+
+  assert(v.half_ratio().ToFloat() == -1.5f);
+  assert(v.maybe_half().has_value() && v.maybe_half()->ToFloat() == 0.25f);
+  std::optional<nanobuf::ScalarList<nanobuf::Float16>> halves = v.halves();
+  assert(halves.has_value() && halves->size() == 4);
+  assert((*halves)[0].bits == 0);
+  assert((*halves)[1].ToFloat() == 65504.0f);
+  assert((*halves)[2].bits == 0x0001);
+  assert((*halves)[3].ToFloat() == HUGE_VALF);
 }
 
 void TestTreeView(const std::vector<uint8_t>& tree_bin) {
@@ -338,7 +354,7 @@ void TestCorruptInput(const std::vector<uint8_t>& everything_bin,
 
   // Invalid UTF-8 in a string heap entry is corruption, not data.
   mutated = everything_bin;
-  mutated[0x78] = 0xff;  // first byte of "telemetry probe"
+  mutated[0x80] = 0xff;  // first byte of "telemetry probe"
   view = EverythingView::Parse(mutated.data(), mutated.size());
   assert(view.has_value());
   assert(!view->name().has_value());
