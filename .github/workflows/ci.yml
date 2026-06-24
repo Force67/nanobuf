@@ -4,13 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
+# Newer pushes to the same ref cancel superseded runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  rust:
-    name: Rust (fmt, clippy, test)
+  # Style and lints, enforced once on the strictest toolchain.
+  lint:
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,33 +26,162 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
-  conformance:
-    name: Conformance (${{ matrix.runtime }})
+  # The Rust workspace, natively, across the three desktop OSes and across
+  # stable / beta / the declared MSRV.
+  test:
+    name: Test (${{ matrix.os }} / ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+        include:
+          - { os: ubuntu-latest, rust: beta }
+          - { os: ubuntu-latest, rust: "1.94" } # MSRV: rust-version in Cargo.toml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust }}
+      - run: cargo build --workspace --all-targets
+      - run: cargo test --workspace
+
+  # Prove the crates compile for a broad target zoo. check-only: rustc emits
+  # metadata without a linker, so no cross C toolchain is needed. Real OSes get
+  # the whole workspace; the bare wasm targets only get the runtime crate
+  # (`nanobuf`), which is the part meant to run there -- nanoc is a host CLI.
+  cross:
+    name: Cross (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        runtime: [python, cpp, csharp]
+        include:
+          - { target: aarch64-unknown-linux-gnu,      args: --workspace }
+          - { target: armv7-unknown-linux-gnueabihf,  args: --workspace }
+          - { target: x86_64-unknown-linux-musl,      args: --workspace }
+          - { target: aarch64-unknown-linux-musl,     args: --workspace }
+          - { target: riscv64gc-unknown-linux-gnu,    args: --workspace }
+          - { target: x86_64-pc-windows-gnu,          args: --workspace }
+          - { target: x86_64-pc-windows-msvc,         args: --workspace }
+          - { target: aarch64-pc-windows-msvc,        args: --workspace }
+          - { target: x86_64-apple-darwin,            args: --workspace }
+          - { target: aarch64-apple-darwin,           args: --workspace }
+          - { target: wasm32-unknown-unknown,         args: -p nanobuf }
+          - { target: wasm32-wasip1,                  args: -p nanobuf }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo check ${{ matrix.args }} --target ${{ matrix.target }}
+
+  # C++ runtime + generated code: gcc and clang, across C++17/20/23, on Linux
+  # and macOS, under ASan/UBSan.
+  cpp:
+    name: C++ (${{ matrix.os }} / ${{ matrix.cc }} / ${{ matrix.std }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        cc: [g++, clang++]
+        std: [c++17, c++20, c++23]
+        exclude:
+          # macOS images ship AppleClang only; no system g++.
+          - { os: macos-latest, cc: g++ }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: conformance
-      - name: Set up Python
-        if: matrix.runtime == 'python'
-        uses: actions/setup-python@v5
+      - name: conformance
+        env:
+          CXX: ${{ matrix.cc }}
+          CXX_STD: ${{ matrix.std }}
+        run: bash runtimes/cpp/run_tests.sh
+
+  # C++ runtime + generated code under MSVC. Separate job: cl's flag syntax is
+  # nothing like gcc/clang, so it does not go through run_tests.sh. asserts in
+  # the test stay live (no /DNDEBUG); sanitizers are skipped for MSVC.
+  cpp-msvc:
+    name: C++ (windows / msvc / ${{ matrix.std }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        std: [c++17, c++20, c++latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: generate, compile, run
+        shell: cmd
+        run: |
+          cargo run -q -p nanoc -- build conformance/schema/telemetry.nb --lang cpp --out gen-cpp || exit /b 1
+          cl /nologo /std:${{ matrix.std }} /EHsc /W4 /I runtimes\cpp /I gen-cpp runtimes\cpp\conformance_test.cc /Fe:conformance_test.exe || exit /b 1
+          conformance_test.exe conformance\fixtures || exit /b 1
+
+  # Python runtime: every supported interpreter on Linux, plus the oldest and
+  # newest on macOS and Windows.
+  python:
+    name: Python (${{ matrix.os }} / ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        include:
+          - { os: macos-latest, python: '3.9' }
+          - { os: macos-latest, python: '3.13' }
+          - { os: windows-latest, python: '3.9' }
+          - { os: windows-latest, python: '3.13' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          python-version: '3.12'
-      - name: Install pytest
-        if: matrix.runtime == 'python'
-        run: pip install pytest
-      - name: Set up .NET
-        if: matrix.runtime == 'csharp'
-        uses: actions/setup-dotnet@v4
+          shared-key: conformance
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest
+      - name: conformance
+        # Windows exposes the interpreter as `python`, elsewhere `python3`.
+        env:
+          PYTHON: ${{ matrix.os == 'windows-latest' && 'python' || 'python3' }}
+        shell: bash
+        run: bash runtimes/python/run_tests.sh
+
+  # C# / .NET runtime on all three desktop OSes.
+  csharp:
+    name: C# (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: conformance
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: bash runtimes/${{ matrix.runtime }}/run_tests.sh
+      - name: conformance
+        shell: bash
+        run: bash runtimes/csharp/run_tests.sh
