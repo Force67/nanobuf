@@ -82,10 +82,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: package runtimes
+        # The generated code links against these headers, so the runtime
+        # libraries ship alongside the compiler and move in lockstep with it.
+        run: tar czf dist/nanobuf-runtimes.tar.gz runtimes
       - name: checksums
         run: (cd dist && sha256sum * > SHA256SUMS)
       - name: publish
