@@ -260,6 +260,86 @@ pub fn cpp_ident(name: &str) -> String {
     name
 }
 
+const AKI_KEYWORDS: &[&str] = &[
+    "as",
+    "async",
+    "await",
+    "case",
+    "comptime",
+    "capability",
+    "default",
+    "else",
+    "enum",
+    "extends",
+    "extern",
+    "false",
+    "fail",
+    "for",
+    "from",
+    "fn",
+    "if",
+    "import",
+    "in",
+    "interface",
+    "let",
+    "match",
+    "module",
+    "namespace",
+    "none",
+    "null",
+    "pub",
+    "return",
+    "self",
+    "struct",
+    "switch",
+    "true",
+    "try",
+    "union",
+    "unsafe",
+    "var",
+    "while",
+    "yield",
+    "break",
+    "continue",
+    "open",
+    "own",
+    "static",
+    "is",
+    "index",
+    "type",
+    "spawn",
+    "scope",
+    "align",
+    "bits",
+    "packed",
+    "noreorder",
+];
+
+/// aki identifier for a schema member name, escaped with a trailing
+/// underscore when it collides with a keyword.
+pub fn aki_ident(name: &str) -> String {
+    let name = snake(name);
+    if AKI_KEYWORDS.contains(&name.as_str()) {
+        return format!("{name}_");
+    }
+    name
+}
+
+/// aki module path for a package: `demo.telemetry` -> `demo::telemetry`.
+pub fn aki_module(package: &str) -> String {
+    package
+        .split('.')
+        .map(aki_ident)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// File stem of a package's generated module: `demo.telemetry` ->
+/// `demo_telemetry`.
+pub fn aki_file_stem(package: &str) -> String {
+    package.replace('.', "_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,11 +365,15 @@ mod tests {
         assert_eq!(csharp_ident("string"), "String");
         assert_eq!(csharp_ident("event"), "Event");
         assert_eq!(cpp_ident("template"), "template_");
+        assert_eq!(aki_ident("match"), "match_");
+        assert_eq!(aki_ident("max_speed"), "max_speed");
     }
 
     #[test]
     fn module_names() {
         assert_eq!(rust_module("demo.telemetry"), "demo_telemetry");
         assert_eq!(rust_module("common"), "common");
+        assert_eq!(aki_module("demo.telemetry"), "demo::telemetry");
+        assert_eq!(aki_file_stem("demo.telemetry"), "demo_telemetry");
     }
 }

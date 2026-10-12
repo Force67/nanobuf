@@ -3,6 +3,7 @@
 //! All layout decisions live in the schema IR; backends only translate it
 //! into source text, so every language reads and writes identical bytes.
 
+mod aki;
 mod cpp;
 mod csharp;
 pub mod names;
@@ -18,6 +19,7 @@ pub enum Lang {
     Python,
     CSharp,
     Cpp,
+    Aki,
 }
 
 impl Lang {
@@ -27,6 +29,7 @@ impl Lang {
             "python" => Lang::Python,
             "csharp" => Lang::CSharp,
             "cpp" => Lang::Cpp,
+            "aki" => Lang::Aki,
             _ => return None,
         })
     }
@@ -37,6 +40,7 @@ impl Lang {
             Lang::Python => "python",
             Lang::CSharp => "csharp",
             Lang::Cpp => "cpp",
+            Lang::Aki => "aki",
         }
     }
 }
@@ -48,9 +52,20 @@ pub struct GeneratedFile {
 }
 
 /// Generates code for `schema`. `stem` names the output file(s), typically
-/// the root schema file's stem.
+/// the root schema file's stem. aki emits one module per package, so its
+/// output is one file per package and `stem` is unused.
 pub fn generate(schema: &Schema, lang: Lang, stem: &str) -> Result<Vec<GeneratedFile>, String> {
     check_module_collisions(schema)?;
+    if lang == Lang::Aki {
+        return Ok(schema
+            .packages()
+            .into_iter()
+            .map(|package| GeneratedFile {
+                name: format!("{}.aki", names::aki_file_stem(package)),
+                content: aki::generate(schema, package),
+            })
+            .collect());
+    }
     let file = match lang {
         Lang::Rust => GeneratedFile {
             name: format!("{stem}.rs"),
@@ -68,6 +83,7 @@ pub fn generate(schema: &Schema, lang: Lang, stem: &str) -> Result<Vec<Generated
             name: format!("{stem}.nb.h"),
             content: cpp::generate(schema),
         },
+        Lang::Aki => unreachable!("handled above"),
     };
     Ok(vec![file])
 }

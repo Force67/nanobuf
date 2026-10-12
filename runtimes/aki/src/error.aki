@@ -1,0 +1,18 @@
+// Why a buffer failed to decode. The C++ runtime reports every failure as an
+// empty optional; aki names the cause, so a caller can tell a truncated packet
+// from one with a bad string.
+module nanobuf::error;
+
+pub enum DecodeError {
+  // Fewer bytes than a header, a fixed-section read, or a proto3 field needs.
+  Truncated,
+  // The fixed-section length is below 2 or beyond the buffer.
+  BadHeader,
+  // A heap slot, list entry, or count points outside the message, or a
+  // required list element is zero.
+  BadOffset,
+  // A string field holds bytes that are not UTF-8.
+  BadUtf8,
+  // A malformed proto3 field: a bad varint, a group, or an unexpected wire type.
+  BadWire,
+}

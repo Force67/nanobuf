@@ -1,0 +1,244 @@
+// Zero-copy reads over a serialized message. Scalars are bounds-checked
+// offset reads; heap fields follow a u32 slot to a [len][payload] entry. No
+// copy is made: every slice and string here borrows the received bytes for
+// `'a`.
+//
+// Accessors return:
+//   - a plain value for a non-optional scalar (an absent one reads as zero)
+//   - `T?` for an optional scalar (none when absent)
+//   - `T ! DecodeError` for a heap field: an absent non-optional string, bytes,
+//     or list reads as empty, an absent optional one as none, and a corrupt
+//     entry is an error, never a silent default.
+module nanobuf::view;
+
+import {DecodeError} from nanobuf::error;
+import {Float16, le_bits, text_view} from nanobuf::scalar;
+import {List, to_list} from akikit::containers::list;
+import {String, from_str} from akikit::strings::string;
+
+// The message bytes and their fixed-section length, validated by `parse`.
+pub struct View<'a> : Copy {
+  pub let bytes: &'a [u8]
+  pub let fixed_len: usize
+
+  // Validates the header: at least two bytes, and a fixed section that fits.
+  pub fn parse(data: &'a [u8]): View<'a> ! DecodeError;
+  // The raw message bytes, for forwarding without re-encoding.
+  pub fn data(self&): &'a [u8] => self.bytes;
+  pub fn size(self&): usize => #self.bytes;
+
+  pub fn bit_at(self&, byte: usize, bit: u8): bool;
+  pub fn u8_at(self&, at: usize): u8 => self.word(at, 1) as u8;
+  pub fn i8_at(self&, at: usize): i8 => @bit_cast(i8, self.word(at, 1) as u8);
+  pub fn u16_at(self&, at: usize): u16 => self.word(at, 2) as u16;
+  pub fn i16_at(self&, at: usize): i16 => @bit_cast(i16, self.word(at, 2) as u16);
+  pub fn u32_at(self&, at: usize): u32 => self.word(at, 4) as u32;
+  pub fn i32_at(self&, at: usize): i32 => @bit_cast(i32, self.word(at, 4) as u32);
+  pub fn u64_at(self&, at: usize): u64 => self.word(at, 8);
+  pub fn i64_at(self&, at: usize): i64 => @bit_cast(i64, self.word(at, 8));
+  pub fn f16_at(self&, at: usize): Float16 => Float16 { bits: self.word(at, 2) as u16 };
+  pub fn f32_at(self&, at: usize): f32 => @bit_cast(f32, self.word(at, 4) as u32);
+  pub fn f64_at(self&, at: usize): f64 => @bit_cast(f64, self.word(at, 8));
+
+  // `bytes` or optional `bytes`: none when the slot is absent.
+  pub fn bytes_or_absent(self&, slot: usize): &'a [u8]? ! DecodeError;
+  pub fn bytes_at(self&, slot: usize): &'a [u8] ! DecodeError;
+  pub fn str_at(self&, slot: usize): str<'a>? ! DecodeError;
+  pub fn message_at(self&, slot: usize): View<'a>? ! DecodeError;
+  // `list<string>`, `list<bytes>`, and `list<message>` share one shape.
+  pub fn offset_list_at(self&, slot: usize): OffsetList<'a> ! DecodeError;
+  // `list<scalar>` or `list<enum>`; `read` decodes one element of `size` bytes.
+  pub fn scalar_list_at<T>(self&, slot: usize, size: usize, read: static fn(&[u8]): T): ScalarList<'a, T> ! DecodeError;
+}
+
+// A fixed-width list, decoded element by element through `read`.
+pub struct ScalarList<'a, T> {
+  pub let bytes: &'a [u8]
+  pub let size: usize
+  pub let read: static fn(&[u8]): T
+
+  pub fn len(self&): usize => #self.bytes / self.size;
+  pub fn at(self&, i: usize): T => self.read(self.bytes[i * self.size..(i + 1) * self.size]);
+
+  pub fn to_list(self&): List<T> {
+    var out = List::<T>();
+    for (let i in 0..self.len()) {
+      out.push(self.at(i));
+    }
+    return out;
+  }
+}
+
+// A list of heap entries: a u32 count, then one u32 message-relative offset
+// per element. The table is checked when the list is opened; each element is
+// checked when read.
+pub struct OffsetList<'a> : Copy {
+  pub let view: View<'a>
+  pub let table: &'a [u8]
+
+  pub fn len(self&): usize => #self.table / 4;
+  pub fn bytes_at(self&, i: usize): &'a [u8] ! DecodeError;
+  pub fn str_at(self&, i: usize): str<'a> ! DecodeError;
+  pub fn message_at(self&, i: usize): View<'a> ! DecodeError;
+
+  pub fn to_strings(self&): List<String> ! DecodeError {
+    var out = List::<String>();
+    for (let i in 0..self.len()) {
+      let s = try self.str_at(i);
+      out.push(from_str(s));
+    }
+    return out;
+  }
+
+  pub fn to_bytes(self&): List<List<u8>> ! DecodeError {
+    var out = List::<List<u8>>();
+    for (let i in 0..self.len()) {
+      let b = try self.bytes_at(i);
+      out.push(to_list(b));
+    }
+    return out;
+  }
+}
+
+fn View::parse(data: &'a [u8]): View<'a> ! DecodeError {
+  if (#data < 2) {
+    return fail DecodeError::Truncated;
+  }
+  let fixed_len = le_bits(data[0..2]) as usize;
+  if (fixed_len < 2 || fixed_len > #data) {
+    return fail DecodeError::BadHeader;
+  }
+  return View { bytes: data, fixed_len: fixed_len };
+}
+
+fn View::bit_at(self&, byte: usize, bit: u8): bool {
+  if (byte >= self.fixed_len) {
+    return false;
+  }
+  return ((self.bytes[byte] >> bit) & 1) != 0;
+}
+
+// Reads a fixed-section value of `n` bytes at `at`. Past the writer's fixed
+// section the value reads as zero, which is how old data yields defaults for
+// fields added later.
+fn View::word(self&, at: usize, n: usize): u64 {
+  if (at + n > self.fixed_len) {
+    return 0;
+  }
+  return le_bits(self.bytes[at..at + n]);
+}
+
+// The message-relative offset in a heap slot, or none when the slot is zero
+// or lies past the writer's fixed section.
+fn View::slot(self&, slot: usize): usize? {
+  if (slot + 4 > self.fixed_len) {
+    return none;
+  }
+  let offset = le_bits(self.bytes[slot..slot + 4]) as usize;
+  if (offset == 0) {
+    return none;
+  }
+  return offset;
+}
+
+// The payload of the `[len: u32][payload]` entry at `at`. Every read stays
+// inside the message.
+fn View::entry(self&, at: usize): &'a [u8] ! DecodeError {
+  if (#self.bytes < 4 || at > #self.bytes - 4) {
+    return fail DecodeError::BadOffset;
+  }
+  let len = le_bits(self.bytes[at..at + 4]) as usize;
+  if (len > #self.bytes - at - 4) {
+    return fail DecodeError::BadOffset;
+  }
+  return self.bytes[at + 4..at + 4 + len];
+}
+
+// The u32 count at a list entry, checked against the `elem`-byte elements
+// that follow it.
+fn View::count_at(self&, at: usize, elem: usize): usize ! DecodeError {
+  if (#self.bytes < 4 || at > #self.bytes - 4) {
+    return fail DecodeError::BadOffset;
+  }
+  let count = le_bits(self.bytes[at..at + 4]) as usize;
+  if (count > (#self.bytes - at - 4) / elem) {
+    return fail DecodeError::BadOffset;
+  }
+  return count;
+}
+
+fn View::bytes_or_absent(self&, slot: usize): &'a [u8]? ! DecodeError {
+  let at = self.slot(slot) else {
+    return none;
+  };
+  let payload = try self.entry(at);
+  return payload;
+}
+
+fn View::bytes_at(self&, slot: usize): &'a [u8] ! DecodeError {
+  let payload = try self.bytes_or_absent(slot);
+  if (let p = payload) {
+    return p;
+  }
+  return self.bytes[0..0];
+}
+
+fn View::str_at(self&, slot: usize): str<'a>? ! DecodeError {
+  let payload = try self.bytes_or_absent(slot);
+  let b = payload else {
+    return none;
+  };
+  let text = try text_view(b);
+  return text;
+}
+
+fn View::message_at(self&, slot: usize): View<'a>? ! DecodeError {
+  let payload = try self.bytes_or_absent(slot);
+  let b = payload else {
+    return none;
+  };
+  let child = try View::parse(b);
+  return child;
+}
+
+fn View::offset_list_at(self&, slot: usize): OffsetList<'a> ! DecodeError {
+  let whole = View { bytes: self.bytes, fixed_len: self.fixed_len };
+  let at = self.slot(slot) else {
+    return OffsetList { view: whole, table: self.bytes[0..0] };
+  };
+  let count = try self.count_at(at, 4);
+  return OffsetList { view: whole, table: self.bytes[at + 4..at + 4 + count * 4] };
+}
+
+fn View::scalar_list_at<T>(self&, slot: usize, size: usize, read: static fn(&[u8]): T): ScalarList<'a, T> ! DecodeError {
+  let at = self.slot(slot) else {
+    return ScalarList { bytes: self.bytes[0..0], size: size, read: read };
+  };
+  let count = try self.count_at(at, size);
+  return ScalarList { bytes: self.bytes[at + 4..at + 4 + count * size], size: size, read: read };
+}
+
+fn OffsetList::bytes_at(self&, i: usize): &'a [u8] ! DecodeError {
+  if (i >= self.len()) {
+    return fail DecodeError::BadOffset;
+  }
+  let offset = le_bits(self.table[i * 4..i * 4 + 4]) as usize;
+  // Writers emit an entry for every element, so a zero offset is corruption.
+  if (offset == 0) {
+    return fail DecodeError::BadOffset;
+  }
+  let payload = try self.view.entry(offset);
+  return payload;
+}
+
+fn OffsetList::str_at(self&, i: usize): str<'a> ! DecodeError {
+  let b = try self.bytes_at(i);
+  let text = try text_view(b);
+  return text;
+}
+
+fn OffsetList::message_at(self&, i: usize): View<'a> ! DecodeError {
+  let b = try self.bytes_at(i);
+  let child = try View::parse(b);
+  return child;
+}
