@@ -1,0 +1,137 @@
+// Single-buffer message writer. Generated `write_to` methods call `begin`,
+// patch field slots, and append heap entries; nested messages are written
+// depth-first into the same buffer. Every offset the writer returns or stores
+// is relative to the start of the message being written, which is what the
+// wire format requires.
+module nanobuf::writer;
+
+import {List} from akikit::containers::list;
+
+// A nested message whose length prefix is reserved and whose body is still
+// being written. Returned by `open_message`, consumed by `close_message`.
+pub struct OpenMessage : Copy {
+  // Absolute position of the reserved u32 length.
+  pub let entry: usize
+  // Start of the enclosing message, restored when the body closes.
+  pub let outer: usize
+}
+
+pub struct Writer {
+  pub var buf: List<u8> = List::<u8>();
+  pub var base: usize = 0;
+
+  // Starts a message at the current end of the buffer: writes the header and
+  // zero-fills the rest of the fixed section.
+  pub fn begin(var self&, fixed_len: u16) {
+    self.base = self.buf.len();
+    for (let i in 0..fixed_len) {
+      self.buf.push(0);
+    }
+    self.put_uint(0, fixed_len as u64, 2);
+  }
+
+  // Stores the low `size` bytes of `value`, little-endian, at a
+  // message-relative position.
+  pub fn put_uint(var self&, at: usize, value: u64, size: usize) {
+    let p = self.base + at;
+    for (let i in 0..size) {
+      self.buf[p + i] = ((value >> (8 * i as u64)) & 0xff) as u8;
+    }
+  }
+
+  // Sets a presence bit or a bool in the fixed section.
+  pub fn put_bit(var self&, byte: usize, bit: u8, value: bool) {
+    if (value) {
+      let p = self.base + byte;
+      self.buf[p] = self.buf[p] | (1u8 << bit);
+    }
+  }
+
+  // Points a fixed-section offset slot at a message-relative heap offset.
+  pub fn set_slot(var self&, slot: usize, offset: u32) {
+    self.put_uint(slot, offset as u64, 4);
+  }
+
+  // Appends a `[len: u32][payload]` entry and returns its offset.
+  pub fn heap_bytes(var self&, payload: &[u8]): u32 {
+    let entry = self.buf.len();
+    self.append_uint((#payload) as u64, 4);
+    for (let b in payload) {
+      self.buf.push(b);
+    }
+    return (entry - self.base) as u32;
+  }
+
+  // A `string` or `bytes` field. An empty payload writes nothing unless
+  // `force` is set, so absent and empty read the same for non-optional fields.
+  pub fn put_bytes(var self&, slot: usize, payload: &[u8], force: bool) {
+    if (#payload == 0 && !force) {
+      return;
+    }
+    let offset = self.heap_bytes(payload);
+    self.set_slot(slot, offset);
+  }
+
+  // Starts a list of `count` heap entries. The offset table is zero-filled;
+  // the caller stores each element's offset with `put_uint`. Returns the
+  // list's offset for `set_slot`.
+  pub fn begin_offset_list(var self&, count: usize): u32 {
+    let entry = self.buf.len();
+    self.append_uint(count as u64, 4);
+    for (let i in 0..count * 4) {
+      self.buf.push(0);
+    }
+    return (entry - self.base) as u32;
+  }
+
+  // Starts a list of `count` scalars of `elem` bytes, padded so the payload
+  // is naturally aligned. The caller stores the elements with `put_uint`.
+  pub fn begin_scalar_list(var self&, count: usize, elem: usize): u32 {
+    self.pad_payload_to(elem);
+    let entry = self.buf.len();
+    self.append_uint(count as u64, 4);
+    for (let i in 0..count * elem) {
+      self.buf.push(0);
+    }
+    return (entry - self.base) as u32;
+  }
+
+  // Reserves a nested message's length prefix. The message is aligned to 8
+  // bytes relative to the enclosing message, as the wire format requires.
+  pub fn open_message(var self&): OpenMessage {
+    self.pad_payload_to(8);
+    let entry = self.buf.len();
+    self.append_uint(0, 4);
+    return OpenMessage { entry: entry, outer: self.base };
+  }
+
+  // Patches the length of an open message, restores the enclosing message,
+  // and returns the offset to store in the parent's slot or table.
+  pub fn close_message(var self&, open: OpenMessage): u32 {
+    let body = self.buf.len() - (open.entry + 4);
+    for (let i in 0..4) {
+      self.buf[open.entry + i] = ((body as u64 >> (8 * i as u64)) & 0xff) as u8;
+    }
+    self.base = open.outer;
+    return (open.entry - self.base) as u32;
+  }
+
+  // Consumes the writer and returns the bytes.
+  pub fn into_list(self): List<u8> => self.buf;
+
+  // Pads so the next entry's payload, after its 4-byte prefix, is `align`
+  // aligned relative to the message start.
+  fn pad_payload_to(var self&, align: usize) {
+    let payload_pos = self.buf.len() - self.base + 4;
+    let target = (payload_pos + align - 1) / align * align;
+    for (let i in 0..target - payload_pos) {
+      self.buf.push(0);
+    }
+  }
+
+  fn append_uint(var self&, value: u64, size: usize) {
+    for (let i in 0..size) {
+      self.buf.push(((value >> (8 * i as u64)) & 0xff) as u8);
+    }
+  }
+}

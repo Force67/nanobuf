@@ -1,0 +1,556 @@
+// Conformance test for the aki backend. Mirrors runtimes/cpp/conformance_test.cc:
+// the sample values here must stay byte-identical to the Rust fixtures in
+// conformance/fixtures. run_tests.sh generates tests/gen from
+// conformance/schema before this runs.
+//
+// Each check prints its name when it fails and counts toward the exit code.
+
+module conformance_test;
+
+import {println} from akikit::logging;
+import {List, to_list} from akikit::containers::list;
+import {String, from_str} from akikit::strings::string;
+import {arg_text} from akikit::process::command_line;
+import {read_bytes} from akikit::filesystem::file_util;
+import {Box} from akikit::memory::box;
+import {Float16} from nanobuf::scalar;
+import {write_varint_field} from nanobuf::proto;
+import {same_items} from nanobuf::equal;
+import {write_varint_field} from nanobuf::proto;
+import {Header} from common;
+import {Everything, EverythingView, Status, Wide, Tree, TreeView, status_name} from demo::telemetry;
+
+fn check(ok: bool, what: str): i32 {
+  if (ok) {
+    return 0;
+  }
+  println(f"FAILED: {what}");
+  return 1;
+}
+
+// A fixture file as bytes; a missing fixture stops the test.
+fn fixture(dir: str, name: str): List<u8> {
+  let raw = read_bytes(f"{dir}/{name}")!;
+  return to_list(raw.as_slice() as &[u8]);
+}
+
+// True when an optional is absent. Works for any optional payload type.
+fn absent<T>(x: T?): bool {
+  if (let _v = x) {
+    return false;
+  }
+  return true;
+}
+
+fn parses_everything(data: &[u8]): bool {
+  if (let _v = EverythingView::parse(data)) {
+    return true;
+  }
+  return false;
+}
+
+fn name_is_corrupt<'a>(v: EverythingView<'a>): bool {
+  if (let _s = v.name()) {
+    return false;
+  }
+  return true;
+}
+
+fn strings_of(items: &[str]): List<String> {
+  var out = List::<String>();
+  for (let s in items) {
+    out.push(from_str(s));
+  }
+  return out;
+}
+
+fn sample_everything(): Everything {
+  var e = Everything {};
+  e.flag = true;
+  e.tiny = 7;
+  e.small = -1234;
+  e.medium = 0xdeadbeef;
+  e.big = 6148914691236517205;
+  e.sneg = -5000000000;
+  e.ratio = 1.25;
+  e.precise = -2.5e10;
+  e.status = Status::Ok;
+  e.wide = Wide::Neg;
+  e.name = from_str("telemetry probe");
+  e.blob = to_list(b"\x00\x01\x02\xfe\xff" as &[u8]);
+  e.maybe_flag = false;
+  e.maybe_small = -7;
+  e.maybe_precise = none;
+  e.maybe_status = Status::Degraded;
+  e.maybe_name = String();
+  e.maybe_blob = none;
+  e.numbers = to_list([1u16, 2u16, 3u16, 65535u16]);
+  e.floats = to_list([0.5, -0.5]);
+  e.statuses = to_list([Status::Ok, Status::Unknown, 200 as Status]);
+  e.tags = strings_of(["a", "", "long tag value"]);
+  e.blobs = List::<List<u8>>();
+  e.blobs.push(to_list([1u8]));
+  e.blobs.push(List::<u8>());
+  e.blobs.push(to_list([2u8, 3u8]));
+  e.headers = List::<Header>();
+  e.headers.push(Header { source: 1, region: from_str("eu") });
+  e.headers.push(Header { source: 2, region: String() });
+  e.header = Header { source: 42, region: from_str("us-east") };
+  e.fixed_int = -123456;
+  e.raw_int = -42;
+  e.flags = to_list([true, false, true]);
+  e.half_ratio = Float16::from_f32(-1.5);
+  e.maybe_half = Float16::from_f32(0.25);
+  e.halves = List::<Float16>();
+  e.halves.push(Float16 {});
+  e.halves.push(Float16::from_f32(65504.0));
+  e.halves.push(Float16 { bits: 1 });
+  e.halves.push(Float16::from_f32(@bit_cast(f32, 0x7f800000u32)));
+  return e;
+}
+
+fn sample_tree(): Tree {
+  var right = Tree { value: 3 };
+  var left = Tree { value: 2 };
+  left.right = Box::<Tree>(right);
+  var root = Tree { value: 1 };
+  root.left = Box::<Tree>(left);
+  return root;
+}
+
+fn test_encode_matches_fixtures(everything_bin: &[u8], tree_bin: &[u8]): i32 {
+  let encoded = sample_everything().encode();
+  let tree_encoded = sample_tree().encode();
+  return check(same_items(encoded.as_slice(), everything_bin), "Everything encodes to the fixture")
+    + check(same_items(tree_encoded.as_slice(), tree_bin), "Tree encodes to the fixture");
+}
+
+fn test_decode_fixtures(everything_bin: &[u8], tree_bin: &[u8]): i32 {
+  var failed: i32 = 0;
+  let e = Everything::decode(everything_bin)!;
+  failed += check(e == sample_everything(), "Everything decodes to the sample");
+  let t = Tree::decode(tree_bin)!;
+  failed += check(t == sample_tree(), "Tree decodes to the sample");
+  // Re-encoding the decoded message reproduces the fixture bytes.
+  let again = e.encode();
+  failed += check(same_items(again.as_slice(), everything_bin), "re-encoded Everything matches");
+  let tree_again = t.encode();
+  failed += check(same_items(tree_again.as_slice(), tree_bin), "re-encoded Tree matches");
+  return failed;
+}
+
+fn test_view_accessors(everything_bin: &[u8]): i32 {
+  var failed: i32 = 0;
+  let v = EverythingView::parse(everything_bin)!;
+  failed += check(v.data() == everything_bin, "view data() is the message");
+  failed += check(v.size() == #everything_bin, "view size() is the message length");
+
+  failed += check(v.flag() == true, "flag");
+  failed += check(v.tiny() == 7, "tiny");
+  failed += check(v.small() == -1234, "small");
+  failed += check(v.medium() == 0xdeadbeef, "medium");
+  failed += check(v.big() == 6148914691236517205, "big");
+  failed += check(v.sneg() == -5000000000, "sneg");
+  failed += check(v.ratio() == 1.25, "ratio");
+  failed += check(v.precise() == -2.5e10, "precise");
+  failed += check(v.status() == Status::Ok, "status");
+  failed += check((status_name(v.status()) ?? "") == "ok", "status name");
+  failed += check(v.wide() == Wide::Neg, "wide");
+
+  failed += check((v.name()!) == "telemetry probe", "name");
+  failed += check(same_items(v.blob()!, b"\x00\x01\x02\xfe\xff" as &[u8]), "blob");
+
+  failed += check((v.maybe_flag() ?? true) == false, "maybe_flag present");
+  failed += check((v.maybe_small() ?? 0) == -7, "maybe_small present");
+  failed += check(absent(v.maybe_precise()), "maybe_precise absent");
+  failed += check((v.maybe_status() ?? Status::Unknown) == Status::Degraded, "maybe_status present");
+  failed += check((status_name(v.maybe_status() ?? Status::Unknown) ?? "") == "degraded", "maybe_status name");
+  let maybe_name = v.maybe_name()!;
+  failed += check((maybe_name ?? "absent") == "", "maybe_name is present and empty");
+  failed += check(absent(v.maybe_blob()!), "maybe_blob absent");
+
+  let numbers = v.numbers()!;
+  failed += check(numbers.len() == 4, "numbers length");
+  failed += check(numbers.at(0) == 1 && numbers.at(1) == 2 && numbers.at(2) == 3 && numbers.at(3) == 65535, "numbers values");
+  var sum: u32 = 0;
+  for (let i in 0..numbers.len()) {
+    sum += numbers.at(i) as u32;
+  }
+  failed += check(sum == 1 + 2 + 3 + 65535, "numbers sum");
+
+  let floats = v.floats()!;
+  failed += check(same_items(floats.to_list().as_slice(), to_list::<f64>([0.5, -0.5]).as_slice()), "floats");
+
+  let statuses = v.statuses()!;
+  failed += check(statuses.len() == 3, "statuses length");
+  failed += check(statuses.at(0) == Status::Ok && statuses.at(1) == Status::Unknown && statuses.at(2) == 200 as Status, "statuses values");
+  failed += check(absent(status_name(statuses.at(2))), "unknown status has no name");
+
+  let tags = v.tags()!;
+  failed += check(tags.len() == 3, "tags length");
+  failed += check((tags.str_at(0)!) == "a", "tags[0]");
+  failed += check((tags.str_at(1)!) == "", "tags[1]");
+  failed += check((tags.str_at(2)!) == "long tag value", "tags[2]");
+
+  let blobs = v.blobs()!;
+  failed += check(blobs.len() == 3, "blobs length");
+  failed += check(same_items(blobs.bytes_at(0)!, b"\x01" as &[u8]), "blobs[0]");
+  failed += check(#(blobs.bytes_at(1)!) == 0, "blobs[1] is empty");
+  failed += check(same_items(blobs.bytes_at(2)!, b"\x02\x03" as &[u8]), "blobs[2]");
+
+  let headers = v.headers()!;
+  failed += check(headers.len() == 2, "headers length");
+  let first = headers.get(0)!;
+  failed += check(first.source() == 1, "headers[0] source");
+  failed += check((first.region()!) == "eu", "headers[0] region");
+  let second = headers.get(1)!;
+  failed += check(second.source() == 2, "headers[1] source");
+  failed += check((second.region()!) == "", "headers[1] region empty");
+
+  if (let header = v.header()!) {
+    failed += check(header.source() == 42, "header source");
+    failed += check((header.region()!) == "us-east", "header region");
+  } else {
+    failed += check(false, "header present");
+  }
+
+  failed += check(v.fixed_int() == -123456, "fixed_int");
+  failed += check(v.raw_int() == -42, "raw_int");
+
+  let flags = v.flags()!;
+  failed += check(flags.len() == 3, "flags length");
+  failed += check(flags.at(0) && !flags.at(1) && flags.at(2), "flags values");
+
+  failed += check(v.half_ratio().to_f32() == -1.5, "half_ratio");
+  failed += check((v.maybe_half() ?? Float16 {}) == Float16::from_f32(0.25), "maybe_half");
+  let halves = v.halves()!;
+  failed += check(halves.len() == 4, "halves length");
+  failed += check(halves.at(0).bits == 0, "halves[0] is zero");
+  failed += check(halves.at(1).to_f32() == 65504.0, "halves[1]");
+  failed += check(halves.at(2).bits == 1, "halves[2] is the smallest subnormal");
+  failed += check(halves.at(3).to_f32() == @bit_cast(f32, 0x7f800000u32), "halves[3] is infinity");
+  return failed;
+}
+
+fn test_tree_view(tree_bin: &[u8]): i32 {
+  var failed: i32 = 0;
+  let root = TreeView::parse(tree_bin)!;
+  failed += check(root.value() == 1, "root value");
+  failed += check(absent(root.right()!), "root has no right child");
+  if (let left = root.left()!) {
+    failed += check(left.value() == 2, "left value");
+    failed += check(absent(left.left()!), "left has no left child");
+    if (let leaf = left.right()!) {
+      failed += check(leaf.value() == 3, "leaf value");
+      failed += check(absent(leaf.left()!) && absent(leaf.right()!), "leaf has no children");
+    } else {
+      failed += check(false, "left has a right child");
+    }
+  } else {
+    failed += check(false, "root has a left child");
+  }
+  return failed;
+}
+
+fn test_proto3(pb3_bin: &[u8]): i32 {
+  var failed: i32 = 0;
+  let sample = sample_everything();
+  let encoded = sample.encode_proto3();
+  failed += check(same_items(encoded.as_slice(), pb3_bin), "Everything encodes to proto3 fixture");
+
+  let decoded = Everything::decode_proto3(pb3_bin)!;
+  failed += check(decoded == sample, "proto3 fixture decodes to the sample");
+
+  // Tree round trip through proto3.
+  let tree = sample_tree();
+  let tree_pb3 = tree.encode_proto3();
+  let tree_back = Tree::decode_proto3(tree_pb3.as_slice())!;
+  failed += check(tree_back == tree, "Tree round-trips through proto3");
+
+  // Unknown fields are skipped: field 99, varint 1.
+  var extended = to_list(pb3_bin);
+  write_varint_field(extended, 99, 1);
+  let skipped = Everything::decode_proto3(extended.as_slice())!;
+  failed += check(skipped == sample, "unknown proto3 field is skipped");
+
+  // Unpacked scalars are accepted: field 19 (numbers) as a single varint.
+  var unpacked = List::<u8>();
+  write_varint_field(unpacked, 19, 5);
+  let one = Everything::decode_proto3(unpacked.as_slice())!;
+  failed += check(one.numbers.len() == 1 && one.numbers[0] == 5, "unpacked scalar is accepted");
+
+  // Groups (wire types 3 and 4) are rejected.
+  failed += check(!everything_decodes_proto3(b"\x0b" as &[u8]), "start-group is rejected");
+  failed += check(!everything_decodes_proto3(b"\x0c" as &[u8]), "end-group is rejected");
+
+  // Malformed varints: more than 10 bytes, or a tenth byte above 1.
+  var runaway = List::<u8>();
+  runaway.push(0x08);
+  for (let i in 0..11) {
+    runaway.push(0x80);
+  }
+  failed += check(!everything_decodes_proto3(runaway.as_slice()), "runaway varint is rejected");
+  var too_big = List::<u8>();
+  too_big.push(0x08);
+  for (let i in 0..9) {
+    too_big.push(0xff);
+  }
+  too_big.push(0x02);
+  failed += check(!everything_decodes_proto3(too_big.as_slice()), "varint above 64 bits is rejected");
+  return failed;
+}
+
+fn owned_is_ok<'a>(v: EverythingView<'a>): bool {
+  if (let _owned = v.to_owned()) {
+    return true;
+  }
+  return false;
+}
+
+fn everything_decodes_proto3(data: &[u8]): bool {
+  if (let _m = Everything::decode_proto3(data)) {
+    return true;
+  }
+  return false;
+}
+
+fn everything_decodes(data: &[u8]): bool {
+  if (let _m = Everything::decode(data)) {
+    return true;
+  }
+  return false;
+}
+
+fn tree_decodes(data: &[u8]): bool {
+  if (let _t = Tree::decode(data)) {
+    return true;
+  }
+  return false;
+}
+
+// Touches every accessor so an out-of-bounds read would panic the test.
+// Errors and absent fields are fine here: the test only checks that nothing
+// aborts.
+fn exercise<'a>(v: EverythingView<'a>) {
+  let _tiny = v.tiny();
+  let _small = v.small();
+  let _medium = v.medium();
+  let _big = v.big();
+  let _sneg = v.sneg();
+  let _ratio = v.ratio();
+  let _precise = v.precise();
+  let _status = v.status();
+  let _wide = v.wide();
+  let _name = v.name();
+  let _blob = v.blob();
+  let _maybe_flag = v.maybe_flag();
+  let _maybe_small = v.maybe_small();
+  let _maybe_precise = v.maybe_precise();
+  let _maybe_status = v.maybe_status();
+  let _maybe_name = v.maybe_name();
+  let _maybe_blob = v.maybe_blob();
+  let _fixed_int = v.fixed_int();
+  let _raw_int = v.raw_int();
+  let _half = v.half_ratio();
+  let _maybe_half = v.maybe_half();
+  if (let numbers = v.numbers()) {
+    for (let i in 0..numbers.len()) {
+      let _n = numbers.at(i);
+    }
+  }
+  if (let tags = v.tags()) {
+    for (let i in 0..tags.len()) {
+      let _t = tags.str_at(i);
+    }
+  }
+  if (let blobs = v.blobs()) {
+    for (let i in 0..blobs.len()) {
+      let _b = blobs.bytes_at(i);
+    }
+  }
+  if (let headers = v.headers()) {
+    for (let i in 0..headers.len()) {
+      if (let h = headers.get(i)) {
+        let _source = h.source();
+        let _region = h.region();
+      }
+    }
+  }
+  if (let maybe_header = v.header()) {
+    if (let header = maybe_header) {
+      let _source = header.source();
+      let _region = header.region();
+    }
+  }
+  if (let flags = v.flags()) {
+    for (let i in 0..flags.len()) {
+      let _f = flags.at(i);
+    }
+  }
+  let _owned = v.to_owned();
+}
+
+fn test_corrupt_input(everything_bin: &[u8], pb3_bin: &[u8]): i32 {
+  var failed: i32 = 0;
+  failed += check(!parses_everything(b"" as &[u8]), "empty buffer is rejected");
+  failed += check(!parses_everything(b"\x07" as &[u8]), "one byte is rejected");
+  failed += check(!parses_everything(b"\x01\x00" as &[u8]), "fixed_len below 2 is rejected");
+  failed += check(!parses_everything(b"\x10\x00\x00" as &[u8]), "fixed_len beyond the buffer is rejected");
+
+  // Every truncation either fails to parse or degrades gracefully.
+  for (let len in 0..#everything_bin + 1) {
+    if (let v = EverythingView::parse(everything_bin[0..len])) {
+      exercise(v);
+    }
+    let _decoded = everything_decodes(everything_bin[0..len]);
+  }
+
+  // Single-byte corruptions never crash or read out of bounds.
+  for (let i in 0..#everything_bin) {
+    for (let delta in [0x01u8, 0x80u8, 0xffu8]) {
+      var mutated = to_list(everything_bin);
+      mutated[i] = mutated[i] ^ delta;
+      if (let v = EverythingView::parse(mutated.as_slice())) {
+        exercise(v);
+      }
+    }
+  }
+
+  // A heap slot pointing past the end fails cleanly. Slot 44 is `name`.
+  var past_end = to_list(everything_bin);
+  past_end[44] = 0xff;
+  past_end[45] = 0xff;
+  past_end[46] = 0xff;
+  past_end[47] = 0x7f;
+  let v = EverythingView::parse(past_end.as_slice())!;
+  failed += check(name_is_corrupt(v), "slot past the end is corrupt");
+  failed += check(!owned_is_ok(v), "to_owned reports the corrupt slot");
+  failed += check(!everything_decodes(past_end.as_slice()), "decode rejects the corrupt slot");
+
+  // Invalid UTF-8 in a string heap entry is corruption, not data.
+  var bad_text = to_list(everything_bin);
+  bad_text[0x80] = 0xff;  // first byte of "telemetry probe"
+  let w = EverythingView::parse(bad_text.as_slice())!;
+  failed += check(name_is_corrupt(w), "invalid UTF-8 is corrupt");
+  failed += check(!owned_is_ok(w), "to_owned rejects invalid UTF-8");
+
+  // Proto3 decoding survives truncation and corruption.
+  for (let len in 0..#pb3_bin + 1) {
+    let _decoded = everything_decodes_proto3(pb3_bin[0..len]);
+  }
+  for (let i in 0..#pb3_bin) {
+    var mutated = to_list(pb3_bin);
+    mutated[i] = mutated[i] ^ 0xff;
+    let _decoded = everything_decodes_proto3(mutated.as_slice());
+  }
+  return failed;
+}
+
+fn test_old_data_reads_as_defaults(): i32 {
+  // A writer built from an older schema that only knew `flag` and `tiny`:
+  // fixed_len 4, bit pool byte at 2, tiny at 3. Everything else must read
+  // as zero / false / empty / absent.
+  var failed: i32 = 0;
+  let old = b"\x04\x00\x01\x07" as &[u8];
+  let v = EverythingView::parse(old)!;
+  failed += check(v.flag() == true, "old flag");
+  failed += check(v.tiny() == 7, "old tiny");
+  failed += check(v.small() == 0 && v.medium() == 0 && v.big() == 0, "new ints read as zero");
+  failed += check(v.ratio() == 0.0 && v.precise() == 0.0, "new floats read as zero");
+  failed += check(v.status() == Status::Unknown, "new enum reads as zero");
+  failed += check(v.wide() == Wide::Zero, "new wide enum reads as zero");
+  failed += check((v.name()!) == "", "absent name reads as empty");
+  failed += check(#v.blob()! == 0, "absent blob reads as empty");
+  failed += check(absent(v.maybe_flag()), "absent optional bool");
+  failed += check(absent(v.maybe_small()), "absent optional int");
+  failed += check(absent(v.maybe_precise()), "absent optional float");
+  failed += check(absent(v.maybe_status()), "absent optional enum");
+  failed += check(absent(v.maybe_name()!), "absent optional string");
+  failed += check(absent(v.maybe_blob()!), "absent optional bytes");
+  failed += check(v.numbers()!.len() == 0, "absent numbers is empty");
+  failed += check(v.tags()!.len() == 0, "absent tags is empty");
+  failed += check(v.blobs()!.len() == 0, "absent blobs is empty");
+  failed += check(v.headers()!.len() == 0, "absent headers is empty");
+  failed += check(absent(v.header()!), "absent header");
+  failed += check(v.fixed_int() == 0 && v.raw_int() == 0, "new signed ints read as zero");
+  failed += check(v.flags()!.len() == 0, "absent flags is empty");
+
+  let owned = v.to_owned()!;
+  var expected = Everything {};
+  expected.flag = true;
+  expected.tiny = 7;
+  failed += check(owned == expected, "old data converts to the expected owned value");
+  return failed;
+}
+
+fn test_empty_and_absent_are_identical(): i32 {
+  var failed: i32 = 0;
+  // Non-optional empty string/bytes/lists write nothing: the encoded message
+  // is exactly the fixed section.
+  let empty = Everything {};
+  let bytes = empty.encode();
+  failed += check(bytes.len() == Everything::fixed_len() as usize, "empty message is its fixed section");
+  let back = Everything::decode(bytes.as_slice())!;
+  failed += check(back == empty, "empty message round-trips");
+
+  // An optional string holding "" is present, not absent.
+  var with_empty = Everything {};
+  with_empty.maybe_name = String();
+  let forced = with_empty.encode();
+  failed += check(forced.len() > Everything::fixed_len() as usize, "present empty optional is written");
+  let view = EverythingView::parse(forced.as_slice())!;
+  let name = view.maybe_name()!;
+  failed += check((name ?? "absent") == "", "present empty optional reads as present");
+
+  // Default proto3 encoding is empty: every field is at its default.
+  failed += check(empty.encode_proto3().len() == 0, "default proto3 encoding is empty");
+  return failed;
+}
+
+// The fixtures only decode f16 values; these pin the narrowing rounding that
+// encoding relies on, with results worked out by hand from binary16.
+fn test_float16_conversions(): i32 {
+  var failed: i32 = 0;
+  failed += check(Float16::from_f32(1.0).bits == 0x3c00, "1.0 is 0x3c00");
+  failed += check(Float16::from_f32(65504.0).bits == 0x7bff, "largest finite f16");
+  failed += check(Float16::from_f32(65519.0).bits == 0x7bff, "rounds down below the overflow point");
+  failed += check(Float16::from_f32(65520.0).bits == 0x7c00, "65520 overflows to infinity");
+  failed += check(Float16::from_f32(5.9604644775390625e-8).bits == 0x0001, "smallest subnormal");
+  // Exactly half the smallest subnormal ties to even, which is zero.
+  failed += check(Float16::from_f32(2.98023223876953125e-8).bits == 0x0000, "tie rounds to even zero");
+  // 1.5 times the smallest subnormal ties to even, which is two.
+  failed += check(Float16::from_f32(8.940696716308594e-8).bits == 0x0002, "tie rounds to even two");
+  failed += check(Float16::from_f32(-0.0).bits == 0x8000, "negative zero keeps its sign");
+  failed += check(Float16::from_f32(@bit_cast(f32, 0x7f800000u32)).bits == 0x7c00, "infinity");
+  failed += check(Float16 { bits: 0x3c00 }.to_f32() == 1.0, "0x3c00 widens to 1.0");
+  failed += check(Float16 { bits: 0x0001 }.to_f32() == 5.9604644775390625e-8, "subnormal widens exactly");
+  return failed;
+}
+
+pub fn main(): i32 {
+  let dir = arg_text(1) ?? "conformance/fixtures";
+  let everything_bin = fixture(dir, "everything.nb.bin");
+  let tree_bin = fixture(dir, "tree.nb.bin");
+  let pb3_bin = fixture(dir, "everything.pb3.bin");
+  let everything = everything_bin.as_slice() as &[u8];
+  let tree = tree_bin.as_slice() as &[u8];
+  let pb3 = pb3_bin.as_slice() as &[u8];
+
+  var failed: i32 = 0;
+  failed += test_encode_matches_fixtures(everything, tree);
+  failed += test_decode_fixtures(everything, tree);
+  failed += test_view_accessors(everything);
+  failed += test_tree_view(tree);
+  failed += test_proto3(pb3);
+  failed += test_corrupt_input(everything, pb3);
+  failed += test_old_data_reads_as_defaults();
+  failed += test_empty_and_absent_are_identical();
+  failed += test_float16_conversions();
+
+  if (failed == 0) {
+    println("conformance: all tests passed");
+    return 0;
+  }
+  println(f"conformance: {failed} check(s) failed");
+  return 1;
+}

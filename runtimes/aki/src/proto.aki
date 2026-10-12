@@ -1,0 +1,262 @@
+// Proto3 wire codec, used only in migration mode to talk to legacy peers.
+// Field numbers are the nanobuf field ids. Groups (wire types 3 and 4) are
+// rejected; unknown fields are skipped by the caller.
+module nanobuf::proto;
+
+import {DecodeError} from nanobuf::error;
+import {le_bits, text_view} from nanobuf::scalar;
+import {List, to_list} from akikit::containers::list;
+import {String, from_str} from akikit::strings::string;
+
+pub enum WireType as u8 {
+  Varint = 0,
+  I64 = 1,
+  Len = 2,
+  I32 = 5,
+}
+
+// One decoded value. `scalar` holds a varint, an i64, or an i32, zero-extended.
+pub struct WireValue<'a> : Copy {
+  pub let kind: WireType
+  pub let scalar: u64
+  pub let data: &'a [u8]
+}
+
+pub struct ProtoField<'a> : Copy {
+  pub let number: u32
+  pub let value: WireValue<'a>
+}
+
+// Iterates the fields of one proto3 message. `next` returns none at the end.
+pub struct FieldReader<'a> {
+  pub let buf: &'a [u8]
+  pub var pos: usize = 0
+
+  pub fn next(var self&): ProtoField<'a>? ! DecodeError;
+}
+
+// Reads a varint at `at`, returning its value and the position after it.
+pub fn read_varint(buf: &[u8], at: usize): (u64, usize) ! DecodeError {
+  var result: u64 = 0;
+  var pos = at;
+  var i: u32 = 0;
+  while (i < 10) {
+    if (pos >= #buf) {
+      return fail DecodeError::BadWire;
+    }
+    let byte = buf[pos];
+    pos += 1;
+    // The tenth byte may only carry the final bit of a u64.
+    if (i == 9 && byte > 1) {
+      return fail DecodeError::BadWire;
+    }
+    result |= ((byte & 0x7f) as u64) << (7 * i as u64);
+    if ((byte & 0x80) == 0) {
+      return (result, pos);
+    }
+    i += 1;
+  }
+  return fail DecodeError::BadWire;
+}
+
+pub fn write_varint(var out&: List<u8>, value: u64) {
+  var v = value;
+  while (v >= 0x80) {
+    out.push(((v & 0x7f) | 0x80) as u8);
+    v = v >> 7;
+  }
+  out.push(v as u8);
+}
+
+pub fn zigzag_encode(value: i64): u64 {
+  return (@bit_cast(u64, value) << 1) ^ @bit_cast(u64, value >> 63);
+}
+
+pub fn zigzag_decode(value: u64): i64 {
+  let hi = @bit_cast(i64, value >> 1);
+  let lo = @bit_cast(i64, value & 1);
+  return hi ^ (0 - lo);
+}
+
+// Appends the low `size` bytes of `value`, little-endian.
+pub fn write_fixed(var out&: List<u8>, value: u64, size: usize) {
+  for (let i in 0..size) {
+    out.push(((value >> (8 * i as u64)) & 0xff) as u8);
+  }
+}
+
+pub fn write_tag(var out&: List<u8>, field: u32, kind: WireType) {
+  write_varint(out, ((field as u64) << 3) | (kind as u8 as u64));
+}
+
+pub fn write_varint_field(var out&: List<u8>, field: u32, value: u64) {
+  write_tag(out, field, WireType::Varint);
+  write_varint(out, value);
+}
+
+// A 4- or 8-byte field: `kind` says which, `size` how many bytes to store.
+pub fn write_fixed_field(var out&: List<u8>, field: u32, kind: WireType, value: u64, size: usize) {
+  write_tag(out, field, kind);
+  write_fixed(out, value, size);
+}
+
+pub fn write_len_field(var out&: List<u8>, field: u32, payload: &[u8]) {
+  write_tag(out, field, WireType::Len);
+  write_varint(out, (#payload) as u64);
+  for (let b in payload) {
+    out.push(b);
+  }
+}
+
+// Each helper expects one wire shape and fails on any other.
+pub fn expect_varint<'a>(value: WireValue<'a>): u64 ! DecodeError {
+  if (value.kind != WireType::Varint) {
+    return fail DecodeError::BadWire;
+  }
+  return value.scalar;
+}
+
+pub fn expect_i32<'a>(value: WireValue<'a>): u64 ! DecodeError {
+  if (value.kind != WireType::I32) {
+    return fail DecodeError::BadWire;
+  }
+  return value.scalar;
+}
+
+pub fn expect_i64<'a>(value: WireValue<'a>): u64 ! DecodeError {
+  if (value.kind != WireType::I64) {
+    return fail DecodeError::BadWire;
+  }
+  return value.scalar;
+}
+
+pub fn expect_len<'a>(value: WireValue<'a>): &'a [u8] ! DecodeError {
+  if (value.kind != WireType::Len) {
+    return fail DecodeError::BadWire;
+  }
+  return value.data;
+}
+
+pub fn expect_string<'a>(value: WireValue<'a>): String ! DecodeError {
+  let data = try expect_len(value);
+  let text = try text_view(data);
+  return from_str(text);
+}
+
+pub fn expect_bytes<'a>(value: WireValue<'a>): List<u8> ! DecodeError {
+  let data = try expect_len(value);
+  return to_list(data);
+}
+
+// A packed varint list, or a single unpacked element.
+pub fn read_packed_varints<'a>(value: WireValue<'a>): List<u64> ! DecodeError {
+  var out = List::<u64>();
+  if (value.kind == WireType::Varint) {
+    out.push(value.scalar);
+    return out;
+  }
+  if (value.kind != WireType::Len) {
+    return fail DecodeError::BadWire;
+  }
+  var pos: usize = 0;
+  while (pos < #value.data) {
+    let (v, after) = try read_varint(value.data, pos);
+    out.push(v);
+    pos = after;
+  }
+  return out;
+}
+
+// A packed fixed32 list, or a single unpacked element. Values are
+// zero-extended to u64.
+pub fn read_packed_fixed32<'a>(value: WireValue<'a>): List<u64> ! DecodeError {
+  var out = List::<u64>();
+  if (value.kind == WireType::I32) {
+    out.push(value.scalar);
+    return out;
+  }
+  if (value.kind != WireType::Len || (#value.data) % 4 != 0) {
+    return fail DecodeError::BadWire;
+  }
+  var pos: usize = 0;
+  while (pos < #value.data) {
+    out.push(le_bits(value.data[pos..pos + 4]));
+    pos += 4;
+  }
+  return out;
+}
+
+// A packed fixed64 list, or a single unpacked element.
+pub fn read_packed_fixed64<'a>(value: WireValue<'a>): List<u64> ! DecodeError {
+  var out = List::<u64>();
+  if (value.kind == WireType::I64) {
+    out.push(value.scalar);
+    return out;
+  }
+  if (value.kind != WireType::Len || (#value.data) % 8 != 0) {
+    return fail DecodeError::BadWire;
+  }
+  var pos: usize = 0;
+  while (pos < #value.data) {
+    out.push(le_bits(value.data[pos..pos + 8]));
+    pos += 8;
+  }
+  return out;
+}
+
+fn FieldReader::next(var self&): ProtoField<'a>? ! DecodeError {
+  if (self.pos >= #self.buf) {
+    return none;
+  }
+  let (field, after) = try read_field(self.buf, self.pos);
+  self.pos = after;
+  return field;
+}
+
+// Decodes the field that starts at `at`; returns it and the position after it.
+fn read_field<'a>(buf: &'a [u8], at: usize): (ProtoField<'a>, usize) ! DecodeError {
+  let (tag, after_tag) = try read_varint(buf, at);
+  let number = tag >> 3;
+  if (number == 0 || number > 0xffffffff) {
+    return fail DecodeError::BadWire;
+  }
+  let wire = tag & 7;
+  let empty = buf[0..0];
+  var kind = WireType::Varint;
+  var scalar: u64 = 0;
+  var data = empty;
+  var end = after_tag;
+  if (wire == 0) {
+    let (v, after) = try read_varint(buf, after_tag);
+    scalar = v;
+    end = after;
+  } else if (wire == 1) {
+    kind = WireType::I64;
+    scalar = try read_fixed_at(buf, after_tag, 8);
+    end = after_tag + 8;
+  } else if (wire == 2) {
+    let (len, after) = try read_varint(buf, after_tag);
+    if (len > (#buf - after) as u64) {
+      return fail DecodeError::BadWire;
+    }
+    kind = WireType::Len;
+    end = after + len as usize;
+    data = buf[after..end];
+  } else if (wire == 5) {
+    kind = WireType::I32;
+    scalar = try read_fixed_at(buf, after_tag, 4);
+    end = after_tag + 4;
+  } else {
+    return fail DecodeError::BadWire;
+  }
+  let value = WireValue { kind: kind, scalar: scalar, data: data };
+  return (ProtoField { number: number as u32, value: value }, end);
+}
+
+// Reads `width` bytes at `at` as a little-endian value.
+fn read_fixed_at(buf: &[u8], at: usize, width: usize): u64 ! DecodeError {
+  if (width > #buf - at) {
+    return fail DecodeError::Truncated;
+  }
+  return le_bits(buf[at..at + width]);
+}

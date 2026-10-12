@@ -1,0 +1,61 @@
+// Equality helpers for the owned structs that generated code compares field
+// by field. `List` and `Box` are not `Equal` themselves, so their elements
+// are compared here.
+module nanobuf::equal;
+
+import {List} from akikit::containers::list;
+import {Box} from akikit::memory::box;
+
+// Element-wise equality of two slices of an `Equal` type.
+pub fn same_items<T: Equal>(a: &[T], b: &[T]): bool {
+  if (#a != #b) {
+    return false;
+  }
+  for (let i in 0..#a) {
+    if (!(a[i] == b[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Equality of two `list<bytes>` fields.
+pub fn same_byte_lists(a&: List<List<u8>>, b&: List<List<u8>>): bool {
+  if (a.len() != b.len()) {
+    return false;
+  }
+  for (let i in 0..a.len()) {
+    if (!same_items(a[i].as_slice(), b[i].as_slice())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Equality of two optional `bytes` fields: both absent, or both present and equal.
+pub fn same_bytes_opt(a&: List<u8>?, b&: List<u8>?): bool {
+  if (let x& = a) {
+    let y& = b else {
+      return false;
+    };
+    return same_items(x.as_slice(), y.as_slice());
+  }
+  if (let y& = b) {
+    return false;
+  }
+  return true;
+}
+
+// Equality of two optional boxed message fields.
+pub fn same_boxed<T: Equal>(a&: Box<T>?, b&: Box<T>?): bool {
+  if (let x& = a) {
+    let y& = b else {
+      return false;
+    };
+    return x.get() == y.get();
+  }
+  if (let y& = b) {
+    return false;
+  }
+  return true;
+}
