@@ -65,7 +65,7 @@ and drop the proto3 path afterwards. Proto3 mode exists only for migration.
 
 ```sh
 nanoc check schema.nb                            # diagnostics, warnings, layout hints
-nanoc build schema.nb --lang rust,python,csharp,cpp -o gen/
+nanoc build schema.nb --lang rust,python,csharp,cpp,aki -o gen/
 nanoc layout schema.nb                           # wire layout table per message
 nanoc migrate legacy.proto                       # proto3 -> nanobuf IDL
 ```
@@ -81,10 +81,10 @@ fix-it help, including targeted messages for proto3 syntax habits.
 | `crates/nanobuf-syntax` | `.nb` lexer and parser with error recovery |
 | `crates/nanobuf-schema` | resolution, validation, wire layout, hints |
 | `crates/nanobuf-proto` | proto3 frontend (`nanoc migrate`) |
-| `crates/nanobuf-codegen` | Rust, Python, C#, and C++ backends |
+| `crates/nanobuf-codegen` | Rust, Python, C#, C++, and aki backends |
 | `crates/nanobuf` | Rust runtime: zero-copy views, writer, proto3 codec |
 | `crates/nanoc` | the CLI |
-| `runtimes/` | Python, C++, and C# runtime libraries |
+| `runtimes/` | Python, C++, C#, and aki runtime libraries |
 | `conformance/` | shared schemas, golden fixtures, cross-language tests |
 | `examples/` | one schema used from Rust, Python, C++, and C# |
 

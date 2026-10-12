@@ -34,7 +34,7 @@ enum Command {
     Build {
         /// Root .nb schema file.
         schema: PathBuf,
-        /// Target languages, comma separated: rust, python, csharp, cpp.
+        /// Target languages, comma separated: rust, python, csharp, cpp, aki.
         #[arg(long, value_delimiter = ',', required = true)]
         lang: Vec<String>,
         /// Output directory.
@@ -107,7 +107,9 @@ fn build(path: &Path, langs: &[String], out: &Path, color: bool) -> ExitCode {
         match nanobuf_codegen::Lang::parse(name) {
             Some(lang) => targets.push(lang),
             None => {
-                eprintln!("error: unknown language `{name}` (expected rust, python, csharp, cpp)");
+                eprintln!(
+                    "error: unknown language `{name}` (expected rust, python, csharp, cpp, aki)"
+                );
                 return ExitCode::FAILURE;
             }
         }

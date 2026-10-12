@@ -13,8 +13,12 @@ cargo clippy --quiet --all-targets
 echo "==> cargo fmt --check"
 cargo fmt --check
 
-for runtime in python cpp csharp; do
+for runtime in python cpp csharp aki; do
     script="runtimes/$runtime/run_tests.sh"
+    if [ "$runtime" = aki ] && ! command -v "${AKIKO:-akiko}" >/dev/null 2>&1; then
+        echo "==> skipping aki (no akiko toolchain; set AKIKO)"
+        continue
+    fi
     if [ -x "$script" ] || [ -f "$script" ]; then
         echo "==> $script"
         bash "$script"
